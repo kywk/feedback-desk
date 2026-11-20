@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const TOKEN = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/;
 const ELK_NAME = /^[a-z0-9][a-z0-9_-]{0,127}$/;
@@ -66,6 +67,15 @@ function safeDirectory(value) {
     return typeof value === 'string' && isAbsolute(value) && !value.includes('\0');
 }
 
+export function localRepositoryPath(remote) {
+    try {
+        const path = fileURLToPath(remote);
+        if (path !== '/' && !/[\u0000-\u001f\u007f]/u.test(path) && pathToFileURL(path).href === remote) return path;
+    } catch {
+        // The configured value must be a canonical, hostless file URL.
+    }
+}
+
 function validRemote(value) {
     if (typeof value !== 'string' || /[\s\u0000-\u001f]/u.test(value)) return false;
     if (/^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._/-]+$/.test(value)) return true;
@@ -85,7 +95,9 @@ function validSource(value) {
 }
 
 function validRepo(repo) {
-    return validSource(repo) && validRemote(repo.remote) &&
+    const mode = repo?.repair?.mode === undefined ? 'gitlab' : repo.repair.mode;
+    return validSource(repo) &&
+        (mode === 'local' ? localRepositoryPath(repo.remote) : mode === 'gitlab' && validRemote(repo.remote)) &&
         matches(repo.base_branch, /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/) &&
         matches(repo.base_commit, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 }

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
-import { loadScope, isToken, requireScope, ScopeError } from '../scope/policy.mjs';
+import { loadScope, isToken, localRepositoryPath, requireScope, ScopeError } from '../scope/policy.mjs';
 import { LEASE_FIELDS } from '../consumer/queue.mjs';
 import { canonicalProposalJson as canonicalJson } from '../../../src/shared/automation-analysis.mjs';
 
@@ -71,7 +71,8 @@ function editIsValid(change, prefixes) {
 
 export function validateAuthorization(auth, scopeRevision) {
     requireScope(auth && positiveInt(auth.proposal_revision) &&
-        positiveInt(auth.input_revision) && auth.scope_revision === scopeRevision &&
+        positiveInt(auth.input_revision) && (auth.delivery_mode === undefined || ['local', 'gitlab'].includes(auth.delivery_mode)) &&
+        auth.scope_revision === scopeRevision &&
         matches(auth.proposal_digest, DIGEST) &&
         (auth.kind === 'automatic' || (auth.kind === 'team_approved' && isToken(auth.approval_id))) &&
         auth.proposal && hash(canonicalJson(auth.proposal)) === auth.proposal_digest, 'invalid_repair_authorization');
@@ -96,6 +97,8 @@ export function createRepairScope(configPath, work, authorization) {
             'repair_repo_not_allowed');
 
         const config = repo.repair;
+        const mode = config?.mode ?? 'gitlab';
+        requireScope(mode === (authorization.delivery_mode ?? 'gitlab'), 'repair_delivery_mode_mismatch');
         requireScope(config && typeof config.recovery_directory === 'string' && isAbsolute(config.recovery_directory) &&
             !config.recovery_directory.includes('\0') && validList(config.allowed_paths, prefix => allowedPath(prefix, repo.read_paths)) &&
             matches(config.branch_prefix, /^[A-Za-z0-9][A-Za-z0-9._/-]{0,88}\/$/) &&
@@ -104,7 +107,9 @@ export function createRepairScope(configPath, work, authorization) {
         'invalid_repair_config');
         const recovery = resolve(config.recovery_directory);
         requireScope([...scope.repositories, ...scope.guides].every(source =>
-            resolve(source.directory) !== recovery && !recovery.startsWith(resolve(source.directory) + '/')),
+            resolve(source.directory) !== recovery && !recovery.startsWith(resolve(source.directory) + '/')) &&
+            (mode !== 'local' || (localRepositoryPath(repo.remote) !== recovery &&
+                !recovery.startsWith(localRepositoryPath(repo.remote) + '/'))),
         'repair_recovery_not_private');
 
         requireScope(Array.isArray(proposal.pending_decisions) && proposal.pending_decisions.length === 0 &&
@@ -119,7 +124,11 @@ export function createRepairScope(configPath, work, authorization) {
 
         const checks = proposal.required_check_ids.map(id => config.checks.find(check => check.id === id));
         requireScope(checks.every(Boolean), 'repair_check_not_allowed');
-        return { repo, config, checks, gitlab: gitLabConfig(config.gitlab, repo.remote) };
+        if (mode === 'local') {
+            requireScope(config.gitlab === undefined, 'invalid_repair_config');
+            return { repo, config, checks, mode };
+        }
+        return { repo, config, checks, mode, gitlab: gitLabConfig(config.gitlab, repo.remote) };
     };
 }
 

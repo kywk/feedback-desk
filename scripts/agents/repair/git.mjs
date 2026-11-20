@@ -26,12 +26,12 @@ const SAFE_CONFIG = [
     '-c', 'credential.helper=', '-c', 'http.followRedirects=false',
 ];
 
-export async function git(cwd, args, { signal, env, input, timeout = 5000 } = {}) {
+export async function git(cwd, args, { signal, env, input, timeout = 5000, maxBuffer = MAX_EDIT_FILE + 8192 } = {}) {
     signal?.throwIfAborted();
     return new Promise((resolve, reject) => {
         const child = execFile('git', [...SAFE_CONFIG, ...args], {
             cwd, signal, env: { ...GIT_ENV, ...env }, timeout, killSignal: 'SIGKILL',
-            encoding: 'buffer', maxBuffer: MAX_EDIT_FILE + 8192,
+            encoding: 'buffer', maxBuffer,
         }, (error, stdout) => {
             if (error) reject(error);
             else resolve(stdout);

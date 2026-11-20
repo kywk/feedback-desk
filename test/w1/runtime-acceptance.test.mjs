@@ -41,7 +41,7 @@ async function harness() {
   return { desk, proxy, a, b, worker, traces, row, cleanup };
 }
 
-test('killed consumer resumes checkpoint; customer follow-up creates new work; review is not re-dispatched', { timeout: 30000 }, async t => {
+test('killed consumer resumes checkpoint; customer follow-up creates new work; review is not re-dispatched', { timeout: 90000 }, async t => {
   const h = await harness();
   try {
     const report = await createCustomerReport(h.desk, h.a, 'runtime restart');
@@ -50,8 +50,17 @@ test('killed consumer resumes checkpoint; customer follow-up creates new work; r
     const before = await h.row(report.public_id);
     assert.equal(JSON.parse(before.progress_json).handler.phase, 'qa_checkpoint');
     first.child.kill('SIGKILL'); assert.equal((await first.done).signal, 'SIGKILL');
-    // Advance the lease in the isolated D1 fixture; avoids a 60-second wall-clock wait.
-    await h.desk.db.prepare("UPDATE automation_work SET lease_expires_at = '2000-01-01T00:00:00.000Z' WHERE work_id = ?").bind(before.work_id).run();
+    const expiryMode = process.env.W1_REAL_LEASE === '1' ? 'natural' : 'fixture-expired';
+    if (expiryMode === 'natural') {
+      const delay = Date.parse(before.lease_expires_at) - Date.now() + 250;
+      assert.ok(Number.isFinite(delay) && delay >= 0 && delay <= 65_000, 'unexpected lease expiry');
+      await sleep(delay);
+      const unchanged = await h.row(report.public_id);
+      assert.equal(unchanged.lease_expires_at, before.lease_expires_at);
+    } else {
+      // Fast local feedback; final QA must also run natural expiry.
+      await h.desk.db.prepare("UPDATE automation_work SET lease_expires_at = '2000-01-01T00:00:00.000Z' WHERE work_id = ?").bind(before.work_id).run();
+    }
     const next = h.worker('qa-next'); assert.equal((await next.done).code, 0);
     const after = await h.row(report.public_id); assert.equal(after.work_id, before.work_id); assert.equal(after.lease_generation, before.lease_generation + 1); assert.equal(after.stage, 'waiting_review');
     assert.equal(JSON.parse(after.progress_json).handler.observed, 'qa_checkpoint');
@@ -64,7 +73,7 @@ test('killed consumer resumes checkpoint; customer follow-up creates new work; r
     const followup = h.worker('qa-followup'); assert.equal((await followup.done).code, 0);
     assert.equal((await h.row(report.public_id)).stage, 'waiting_review');
     const rows = await h.desk.db.prepare('SELECT work_id, input_revision FROM automation_work WHERE report_public_id = ?').bind(report.public_id).all(); assert.equal(rows.results.length, 2);
-    t.diagnostic(JSON.stringify({ case: 'restart_followup', report_id: report.public_id, work_ids: rows.results.map(row => row.work_id), attempts: attempts.results, checkpoint: 'qa_checkpoint', final_stage: (await h.row(report.public_id)).stage }));
+    t.diagnostic(JSON.stringify({ case: 'restart_followup', expiry_mode: expiryMode, original_lease_expires_at: before.lease_expires_at, report_id: report.public_id, work_ids: rows.results.map(row => row.work_id), attempts: attempts.results, checkpoint: 'qa_checkpoint', final_stage: (await h.row(report.public_id)).stage }));
   } finally { await h.cleanup(); }
 });
 

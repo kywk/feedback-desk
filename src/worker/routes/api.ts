@@ -2,6 +2,7 @@ import { Hono, type MiddlewareHandler } from 'hono';
 import { z } from 'zod';
 import { AutomationError } from '../lib/automation';
 import { automationReviewState, automationTeamScope, reviewAutomationDecision } from '../lib/automation-decisions';
+import { inspectionDetail } from '../lib/automation-inspections';
 import { identifier, readInput, revision } from './automation';
 import { nowIso } from '../../shared/time';
 import { randomString, sha256Hex } from '../lib/crypto';
@@ -341,7 +342,8 @@ api.get(teamAutomationPath, async (c) => {
     const { scope } = await teamAutomationContext(c);
     const snapshot = await automationReviewState(c.env.DB, scope, c.req.param('ref'), c.req.query('work_id'));
     if (!snapshot) throw new team.ServiceError('report_not_found', '找不到這張回饋單。', 404);
-    return c.json(snapshot);
+    const inspection = await inspectionDetail(c.env.DB, scope, c.req.param('ref'));
+    return c.json(inspection ? { ...snapshot, inspection } : snapshot);
 });
 
 api.post(`${teamAutomationPath}/review`, async (c) => {

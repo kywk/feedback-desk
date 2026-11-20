@@ -9,6 +9,7 @@ import {
     AUTOMATION_STAGES, AutomationError, automationScope, claimAutomationWork, listAutomationEvents,
     recordAutomationIntent, recordAutomationReceipt, renewAutomationWork, saveAutomationProgress, type AutomationScope,
 } from '../lib/automation';
+import { acceptInspectionEvent, acknowledgeInspectionLink, inspectionScope, pendingInspectionLinks } from '../lib/automation-inspections';
 import type { AppEnv } from './context';
 
 export const automation = new Hono<AppEnv & { Variables: { automationScope: AutomationScope } }>();
@@ -16,15 +17,15 @@ const scopePath = '/:project_slug/:environment';
 
 automation.onError((error, c) => {
     if (error instanceof AutomationError) {
-        const headers = error.status === 401 ? { 'WWW-Authenticate': 'Bearer' } : undefined;
-        return c.json({ error: error.code, message: error.message }, error.status, headers);
+        if (error.status === 401) c.header('WWW-Authenticate', 'Bearer');
+        if (error.status === 503) c.header('Retry-After', '1');
+        return c.json({ error: error.code, message: error.message }, error.status);
     }
     throw error;
 });
 
 automation.use(`${scopePath}/*`, async (c, next) => {
     c.header('Cache-Control', 'no-store');
-    c.set('automationScope', await automationScope(c.env.DB, c.req.header('authorization'), c.req.param('project_slug'), c.req.param('environment')));
     await next();
 });
 automation.use(`${scopePath}/*`, bodyLimit({
@@ -99,6 +100,56 @@ export async function readInput<T>(request: HonoRequest, schema: z.ZodType<T>): 
     return parsed.data;
 }
 
+const inspectionLink = z.strictObject({
+    workspace_id: identifier, run_id: identifier, attempt_id: identifier, report_public_id: z.uuid(),
+});
+const inspectionEvent = z.strictObject({
+    schema_version: z.literal(1),
+    event_type: z.literal('whippet.run_finished'),
+    source: z.literal('whippet'),
+    event_id: identifier,
+    operation_id: identifier,
+    scope: z.strictObject({ project_slug: identifier, environment: identifier }),
+    scope_revision: identifier,
+    occurred_at: z.iso.datetime(),
+    payload: z.strictObject({
+        workspace_id: identifier, test_id: identifier, version_id: identifier,
+        run_id: identifier, attempt_id: identifier, started_at: z.iso.datetime(),
+        purpose: z.literal('inspection'), status: z.literal('failed'), failure_kind: z.literal('assertion'),
+        check_key: identifier, failure_signature: identifier,
+        summary: z.string().trim().min(1).max(1000),
+        evidence_refs: z.array(identifier.refine(ref => !ref.includes('://') && !/\bf(?:da|di)_[A-Za-z0-9_-]{28,124}\b/.test(ref))).min(1).max(10),
+    }),
+});
+
+// These routes authenticate the narrower bridge identity before the queue credential middleware.
+automation.post(`${scopePath}/inspection-events`, async (c) => {
+    const scope = await inspectionScope(c.env.DB, c.req.header('authorization'), c.req.param('project_slug'), c.req.param('environment'));
+    const input = await readInput(c.req, inspectionEvent);
+    if (input.scope.project_slug !== scope.project_slug || input.scope.environment !== scope.environment) {
+        throw new AutomationError('scope_forbidden', 403, '巡檢事件的專案或環境與授權不符。');
+    }
+    return c.json(await acceptInspectionEvent(c.env.DB, scope, input, c.get('now')));
+});
+
+automation.get(`${scopePath}/inspection-links`, async (c) => {
+    const scope = await inspectionScope(c.env.DB, c.req.header('authorization'), c.req.param('project_slug'), c.req.param('environment'));
+    const limit = c.req.query('limit') ?? '50';
+    if (!/^(?:[1-9]|[1-4][0-9]|50)$/.test(limit)) {
+        throw new AutomationError('invalid_request', 400, '請指定 1 至 50 筆關聯。');
+    }
+    return c.json(await pendingInspectionLinks(c.env.DB, scope, Number(limit)));
+});
+
+automation.post(`${scopePath}/inspection-links`, async (c) => {
+    const scope = await inspectionScope(c.env.DB, c.req.header('authorization'), c.req.param('project_slug'), c.req.param('environment'));
+    return c.json(await acknowledgeInspectionLink(c.env.DB, scope, await readInput(c.req, inspectionLink)));
+});
+
+automation.use(`${scopePath}/*`, async (c, next) => {
+    c.set('automationScope', await automationScope(c.env.DB, c.req.header('authorization'), c.req.param('project_slug'), c.req.param('environment')));
+    await next();
+});
 automation.get(`${scopePath}/events`, async (c) => {
     const after = c.req.query('after') ?? '0';
     const cursor = Number(after);

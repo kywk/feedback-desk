@@ -28,25 +28,28 @@ export function eventStatement(db: D1Database, report: { id: number } | { public
         .bind('id' in report ? report.id : report.publicId, kind, author.developerId, author.clientAccountId, author.name ?? '', author.agent ?? null, detail, at);
 }
 
-export async function createReport(
-    env: Env,
-    project: Project,
-    data: { title: string; description: string; reporter_name?: string | null; category?: string | null; uploads: Upload[]; author?: Author; shared_with_client?: boolean },
-    creator: Creator,
-    now = Date.now(),
-): Promise<{ report: Report; reporterToken: string }> {
+interface NewReport {
+    title: string;
+    description: string;
+    reporter_name?: string | null;
+    category?: string | null;
+    uploads: Upload[];
+    author?: Author;
+    shared_with_client?: boolean;
+}
+
+export async function createReportStatements(db: D1Database, projectId: number, data: NewReport, creator: Creator, now: number) {
     const reporterToken = randomString(48);
     const publicId = crypto.randomUUID();
     const at = nowIso(now);
-    const db = env.DB;
-    const results = await db.batch([
+    const statements = [
         db
             .prepare(
                 `INSERT INTO reports (project_id, public_id, reporter_token_hash, reporter_name, category, creator_type, creator_developer_id, creator_client_account_id, creator_agent, title, description, status, latest_activity_at, owner_last_read_at, client_last_read_at, created_at, updated_at, shared_with_client)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?) RETURNING *`,
             )
             .bind(
-                project.id,
+                projectId,
                 publicId,
                 await sha256Hex(reporterToken),
                 data.reporter_name ?? null,
@@ -80,7 +83,13 @@ export async function createReport(
                       .bind(creator.creator_client_account_id, publicId, at),
               ]
             : []),
-    ]);
+    ];
+    return { statements, reporterToken, publicId };
+}
+
+export async function createReport(env: Env, project: Project, data: NewReport, creator: Creator, now = Date.now()) {
+    const { statements, reporterToken } = await createReportStatements(env.DB, project.id, data, creator, now);
+    const results = await env.DB.batch(statements);
     return { report: results[0].results[0] as Report, reporterToken };
 }
 

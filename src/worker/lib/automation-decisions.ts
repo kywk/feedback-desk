@@ -4,7 +4,7 @@ import {
 } from '../../shared/automation-analysis.mjs';
 import { nowIso } from '../../shared/time';
 import { config, type Env } from '../env';
-import { ACTIVE_LEASE, AutomationError, SQL_NOW, canonicalJson, leaseBindings, type AutomationScope, type Lease } from './automation';
+import { ACTIVE_LEASE, AutomationError, SQL_NOW, WORK_INGRESS_ENABLED, assertion, canonicalJson, failedAutomationAssertion, leaseBindings, type AutomationScope, type Lease } from './automation';
 import { sha256Hex, timingSafeEqualString } from './crypto';
 import type { Developer, Report } from './models';
 import { addMessageStatements, eventStatement, messageAuthorName } from './reports';
@@ -14,11 +14,11 @@ export const GIT_MR = 'gitlab.create_merge_request';
 export const GIT_LOCAL_BRANCH = 'git.local_branch';
 const SCOPE_KEY = 'project_id = ? AND environment = ? AND scope_revision = ?';
 type Scope = Pick<AutomationScope, 'project_id' | 'project_slug' | 'environment' | 'scope_revision'>;
-type SqlValue = number | string | null;
 type Data = Record<string, unknown>;
 
 interface Work {
     work_id: string;
+    ingress_kind: 'customer' | 'inspection';
     input_revision: number;
     report_revision: number;
     scope_revision: string;
@@ -93,13 +93,7 @@ function scopeBindings(scope: Scope): [number, string, string] {
     return [scope.project_id, scope.environment, scope.scope_revision];
 }
 
-function assertion(db: D1Database, predicate: string, values: SqlValue[]): D1PreparedStatement {
-    return db.prepare(`INSERT INTO automation_assertion (valid) SELECT 0 WHERE NOT (${predicate})`).bind(...values);
-}
-
-export function failedAutomationAssertion(error: unknown): boolean {
-    return error instanceof Error && error.message.includes('CHECK constraint failed: automation_guard');
-}
+export { failedAutomationAssertion } from './automation';
 
 async function policyFor(db: D1Database, scope: Scope) {
     return db.prepare(`SELECT * FROM automation_policies WHERE ${SCOPE_KEY}`).bind(...scopeBindings(scope)).first<Policy>();
@@ -169,7 +163,7 @@ async function repairGrant(db: D1Database, scope: Scope, work: Work) {
 export async function automationInput(db: D1Database, scope: AutomationScope, lease: Lease) {
     const bindings = leaseBindings(scope, lease);
     const guard = `EXISTS (SELECT 1 FROM automation_work w WHERE ${ACTIVE_LEASE})`;
-    const [workRows, reportRows, messages, attachments, reviews] = await db.batch([
+    const [workRows, reportRows, messages, attachments, reviews, inspection] = await db.batch([
         db.prepare(`${WORK_ROW} WHERE ${ACTIVE_LEASE}`).bind(...bindings),
         db.prepare(`SELECT public_id, title, description, status FROM reports WHERE project_id = ?1 AND public_id = ?6 AND ${guard}`).bind(...bindings),
         db.prepare(`SELECT m.id AS message_id, CASE WHEN author_type = 'reporter' THEN 'customer' ELSE 'team' END AS side,
@@ -181,9 +175,12 @@ export async function automationInput(db: D1Database, scope: AutomationScope, le
                 AND (a.message_id IS NULL OR (m.id IS NOT NULL AND m.deleted_at IS NULL)) AND ${guard} ORDER BY a.id DESC LIMIT 20`).bind(...bindings),
         db.prepare(`SELECT rt.evidence_json FROM automation_reviews rt WHERE work_id = ?5 AND evidence_json IS NOT NULL
             AND ${guard} ORDER BY created_at DESC LIMIT 20`).bind(...bindings),
+        db.prepare(`SELECT summary FROM automation_inspection_runs WHERE project_id=?1 AND environment=?2 AND report_public_id=?6
+            AND ${guard} ORDER BY occurred_at DESC, run_id DESC LIMIT 1`).bind(...bindings),
     ]);
     const work = workRows.results[0] as Work | undefined;
-    const report = reportRows.results[0];
+    const report = reportRows.results[0] as Pick<Report, 'public_id' | 'title' | 'description' | 'status'> | undefined;
+    const observation = inspection.results[0] as { summary: string } | undefined;
     if (!work || !report) throw conflict();
     const repair = work.next_action === 'repair' ? await repairGrant(db, scope, work) : null;
     // The extra policy reads for a repair grant may race a report edit or takeover.
@@ -198,6 +195,8 @@ export async function automationInput(db: D1Database, scope: AutomationScope, le
         },
         report: {
             ...report,
+            ...(work.ingress_kind === 'inspection' && observation
+                ? { description: report.description + '\n\n' + observation.summary } : {}),
             messages: messages.results.reverse(),
             attachment_refs: attachments.results,
             evidence_refs: [...new Set((reviews.results as { evidence_json: string }[]).flatMap((r) => JSON.parse(r.evidence_json) as string[]))],
@@ -311,9 +310,12 @@ export async function applyAutomationDecision(env: Env, scope: AutomationScope, 
                 : reason === 'score_below_threshold' || reason === 'evidence_missing' ? '請由團隊補正證據後要求重新分析。'
                 : reason === 'business_decision' ? '請由團隊確認業務需求與驗收條件。' : null;
             if (isCustomerResponse) {
-                outcome = safe && policy?.auto_reply === 1
-                    ? disposition.kind === 'reply' ? 'reply_sent' : 'needs_input_sent'
-                    : safe ? 'draft_created' : 'business_review';
+                outcome = 'business_review';
+                if (work.ingress_kind === 'customer' && safe) {
+                    outcome = policy?.auto_reply === 1
+                        ? disposition.kind === 'reply' ? 'reply_sent' : 'needs_input_sent'
+                        : 'draft_created';
+                }
                 stage = outcome === 'reply_sent' || outcome === 'needs_input_sent' ? 'waiting_customer' : 'waiting_review';
             } else if (disposition.kind === 'repair' && knownRepo) {
                 outcome = 'repair_authorized';
@@ -390,7 +392,7 @@ const REVIEWER = `EXISTS (
     SELECT 1 FROM automation_reviewers ar JOIN developers d ON d.id = ar.developer_id
     JOIN automation_scopes s ON s.project_id = ar.project_id AND s.environment = ar.environment
     WHERE ar.project_id = ?1 AND ar.environment = ?2 AND s.scope_revision = ?3
-        AND s.enabled = 1 AND s.customer_ingress = 1 AND d.id = ?4 AND d.disabled_at IS NULL
+        AND s.enabled = 1 AND d.id = ?4 AND d.disabled_at IS NULL
 )`;
 
 export async function automationReviewState(db: D1Database, scope: TeamScope, publicId: string, workId?: string) {
@@ -468,7 +470,8 @@ export async function reviewAutomationDecision(db: D1Database, scope: TeamScope,
         const stage = approve ? "'waiting_review'" : "'waiting_review','blocked'";
         const guard = assertion(db, `${REVIEWER} AND EXISTS (
             SELECT 1 FROM automation_work w JOIN reports r ON r.public_id=w.report_public_id AND r.project_id=w.project_id
-            WHERE w.project_id=?1 AND w.environment=?2 AND w.work_id=?5 AND w.report_public_id=?6 AND w.input_revision=?7
+            JOIN automation_scopes s ON s.project_id=w.project_id AND s.environment=w.environment
+            WHERE ${WORK_INGRESS_ENABLED} AND w.project_id=?1 AND w.environment=?2 AND w.work_id=?5 AND w.report_public_id=?6 AND w.input_revision=?7
               AND w.proposal_revision=?8 AND r.report_revision=?9 AND r.status<>'completed' AND r.client_deleted_at IS NULL
               AND r.automation_manual_takeover=0 AND r.claimed_by_developer_id IS NULL AND w.stage IN (${stage})
               AND w.lease_expires_at IS NULL AND ((w.scope_revision=?3 AND w.revoked_reason IS NULL)
@@ -674,7 +677,7 @@ export async function automationDraftSend(
         JOIN developers d ON d.id=ar.developer_id
         WHERE ad.draft_id=? AND r.id=? AND md.body=? AND md.updated_at=? AND d.id=? AND d.disabled_at IS NULL
           AND ad.report_revision=r.report_revision AND ad.scope_revision=s.scope_revision AND s.enabled=1 AND s.customer_ingress=1
-          AND w.stage='waiting_review' AND w.decision_outcome='draft_created' AND w.revoked_reason IS NULL
+          AND w.ingress_kind='customer' AND w.stage='waiting_review' AND w.decision_outcome='draft_created' AND w.revoked_reason IS NULL
           AND r.client_deleted_at IS NULL AND r.status<>'completed' AND r.automation_manual_takeover=0 AND r.claimed_by_developer_id IS NULL
     )`, [draft.id, report.id, draft.body, draft.updated_at, developerId]);
     const after = db.prepare(`UPDATE automation_work SET stage='waiting_customer', decision_outcome='draft_sent',

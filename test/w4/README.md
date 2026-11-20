@@ -27,6 +27,6 @@ node --test test/w4/live.test.mjs
 
 成功後各站識別與工單結果會寫入此次 journey 目錄的 evidence.json。
 
-案例另驗證：錯誤環境的簽章部署不建立重測；真實綁定 Run 的結果由測試代理注入 `infrastructure`，確認需人工處理且不得結案（此案例測試 FD 的環境錯誤處置，並非製造實際瀏覽器故障）；較新部署完成後才送達的舊結果回傳 `ignored_stale`，重送回傳相同收據；共用 Run 可透過團隊 API 反查兩張工單，各單 API 亦可查到該次重測。
+案例另驗證：錯誤環境的簽章部署不建立重測；測試站的部署證明正確、瀏覽器取得的 model 回應卻帶舊版本標頭，確認真實 Whippet Run 為 `unverified`、FD 要求人工處理且不得結案；`infrastructure` 類型由 Worker 契約測試覆蓋；較新部署完成後才送達的舊結果回傳 `ignored_stale`，重送回傳相同收據；共用 Run 可透過團隊 API 反查兩張工單，各單 API 亦可查到該次重測。
 
 執行前先確認 GitLab、Whippet 及測試站已就緒，並由整合負責人確認產品版本。測試會在私有 GitLab 建立修復與回歸分支，並變更測試站的 active release；請使用專用驗收環境。`evidence.json` 記錄實際識別與結果，不應包含 token；請妥善保管驗收資料。

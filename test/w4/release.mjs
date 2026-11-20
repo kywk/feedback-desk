@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-export async function deployTodoMVC(directory, deploymentId, revision) {
+export async function deployTodoMVC(directory, deploymentId, revision, modelRevision = revision) {
     assert.match(revision, /^[a-f0-9]{40}$/);
     const origin = new URL(process.env.W2_GITLAB_ORIGIN);
     assert.equal(origin.protocol, 'https:');
@@ -26,7 +26,7 @@ export async function deployTodoMVC(directory, deploymentId, revision) {
     assert.equal(createHash('sha256').update(bytes).digest('hex'), file.content_sha256);
     const proof = { deploymentId, artifactRevision: revision, environment: 'gitlab-qa', projectSlug: 'sandbox-todomvc' };
     const tmp = join(directory, randomUUID() + '.json');
-    await writeFile(tmp, JSON.stringify({ proof, model: bytes.toString('utf8') }), { flag: 'wx' });
+    await writeFile(tmp, JSON.stringify({ proof, model: bytes.toString('utf8'), modelRevision }), { flag: 'wx' });
     await rename(tmp, join(directory, 'active.json'));
     return proof;
 }

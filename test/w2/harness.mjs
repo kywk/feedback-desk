@@ -7,7 +7,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, mkdtemp, writeFile, rm, realpath, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -50,21 +50,34 @@ async function createProject(desk, slug) {
   };
   return { slug, id: row.id, serviceToken, client };
 }
-export async function harness() {
+export async function harness({ local = false } = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'fd-w2-qa-')));
   const desk = await startDesk(); const model = await startModel();
   try {
     const a = await createProject(desk, 'w2-qa-a'); const b = await createProject(desk, 'w2-qa-b');
-    const repo = join(root, 'repo'); await mkdir(repo); await mkdir(join(repo, 'src'));
+    let repo = join(root, 'repo'); await mkdir(repo); await mkdir(join(repo, 'src'));
+    if (local) { await mkdir(join(repo, 'test')); await writeFile(join(repo, 'test/check.mjs'), "import { readFileSync } from 'node:fs'; import assert from 'node:assert/strict'; assert.match(readFileSync('src/items.js', 'utf8'), /return uniqueItems;/);\n"); }
     await writeFile(join(repo, 'src/items.js'), 'function items() {\n  return allItems;\n}\n');
     git(repo, 'init', '-b', 'main'); git(repo, 'add', '.'); git(repo, '-c', 'user.name=QA', '-c', 'user.email=qa@example.invalid', 'commit', '-m', 'fixture');
-    const remote = 'https://gitlab.invalid/qa/test.git'; git(repo, 'remote', 'add', 'origin', remote); const commit = git(repo, 'rev-parse', 'HEAD');
+    const commit = git(repo, 'rev-parse', 'HEAD');
     const bare = join(root, 'remote.git'), recovery = join(root, 'recovery'); await mkdir(recovery, { mode: 0o700 });
     git(root, 'init', '--bare', '-b', 'main', bare); git(repo, 'push', bare, 'main');
+    const remote = local ? pathToFileURL(await realpath(bare)).href : 'https://gitlab.invalid/qa/test.git';
+    if (local) { const clone = join(root, 'clone'); git(root, 'clone', remote, clone); repo = await realpath(clone); }
+    else git(repo, 'remote', 'add', 'origin', remote);
     const scope = { scopes: [a, b].map(p => ({ project_slug: p.slug, environment: 'qa', scope_revision: 'w1-r1', repositories: [{ id: 'fixture-repo', directory: repo, remote, base_branch: 'main', base_commit: commit, read_paths: ['src'], repair: { allowed_paths: ['src'], checks: [{ id: 'unit', argv: ['true'] }], branch_prefix: 'feedback/', recovery_directory: recovery, test_image: 'fixture@sha256:' + 'a'.repeat(64), gitlab: { instance_id: 'gitlab-fixture', origin: 'https://gitlab.invalid', project_id: 23, project_path: 'qa/test', api_token_ref: 'W2_QA_API_TOKEN', push_token_ref: 'W2_QA_PUSH_TOKEN', proof_key_ref: 'FEEDBACK_AUTOMATION_QA_PROOF_KEY', push_username: 'qa' } } }], guides: [] })) };
+    if (local) {
+      for (const scoped of scope.scopes) {
+        scoped.repositories[0].repair = { mode: 'local', allowed_paths: ['src'], branch_prefix: 'feedback/', recovery_directory: recovery, test_image: 'node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293', checks: [{ id: 'unit', argv: ['node', '--test', 'test/check.mjs'] }] };
+      }
+    }
     const config = join(root, 'scope.json'); await writeFile(config, JSON.stringify(scope));
-    await desk.db.prepare("INSERT INTO automation_policies (project_id, environment, scope_revision, auto_reply, gitlab_instance_id, gitlab_origin, gitlab_proof_key_ref) VALUES (?, 'qa', 'w1-r1', 1, 'gitlab-fixture', 'https://gitlab.invalid', 'FEEDBACK_AUTOMATION_QA_PROOF_KEY')").bind(a.id).run();
-    await desk.db.prepare("INSERT INTO automation_repositories (project_id, environment, scope_revision, repo_id, gitlab_project_id, base_branch, base_commit, branch_prefix, required_check_ids) VALUES (?, 'qa', 'w1-r1', 'fixture-repo', 23, 'main', ?, 'feedback/', '[\"unit\"]')").bind(a.id, commit).run();
+    if (!local) await desk.db.prepare("INSERT INTO automation_policies (project_id, environment, scope_revision, auto_reply, gitlab_instance_id, gitlab_origin, gitlab_proof_key_ref) VALUES (?, 'qa', 'w1-r1', 1, 'gitlab-fixture', 'https://gitlab.invalid', 'FEEDBACK_AUTOMATION_QA_PROOF_KEY')").bind(a.id).run();
+    if (!local) await desk.db.prepare("INSERT INTO automation_repositories (project_id, environment, scope_revision, repo_id, gitlab_project_id, base_branch, base_commit, branch_prefix, required_check_ids) VALUES (?, 'qa', 'w1-r1', 'fixture-repo', 23, 'main', ?, 'feedback/', '[\"unit\"]')").bind(a.id, commit).run();
+    if (local) {
+      await desk.db.prepare("INSERT INTO automation_policies (project_id, environment, scope_revision, auto_reply) VALUES (?, 'qa', 'w1-r1', 1)").bind(a.id).run();
+      await desk.db.prepare("INSERT INTO automation_repositories (project_id, environment, scope_revision, repo_id, gitlab_project_id, base_branch, base_commit, branch_prefix, required_check_ids, delivery_mode) VALUES (?, 'qa', 'w1-r1', 'fixture-repo', NULL, 'main', ?, 'feedback/', '[\"unit\"]', 'local')").bind(a.id, commit).run();
+    }
     const now = new Date().toISOString(); const token = 'fdk_' + randomBytes(24).toString('hex');
     const reviewer = await desk.db.prepare('INSERT INTO developers (name, username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?) RETURNING id').bind('QA reviewer', 'w2-reviewer', 'unused', now, now).first();
     await desk.db.prepare('INSERT INTO api_tokens (developer_id, name, token_hash, created_at) VALUES (?, ?, ?, ?)').bind(reviewer.id, 'qa', sha(token), now).run();
@@ -98,7 +111,8 @@ export async function harness() {
     async function report(title) { return createCustomerReport(desk, a, title); }
     async function work(id) { return desk.db.prepare('SELECT * FROM automation_work WHERE report_public_id=? ORDER BY input_revision DESC LIMIT 1').bind(id).first(); }
     async function decisions(id) { return (await desk.db.prepare('SELECT * FROM automation_decisions WHERE work_id=? ORDER BY decision_revision').bind(id).all()).results; }
+    async function teamGet(id) { return fetch(`${desk.url}/api/v1/projects/${a.slug}/reports/${id}/automation/qa`, { headers: { authorization: `Bearer ${token}` } }); }
     async function human(id, endpoint, body) { return fetch(`${desk.url}/api/v1/projects/${a.slug}/reports/${id}/automation/qa/${endpoint}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) }); }
-    return { desk, model, a, b, root, commit, config, bare, report, work, decisions, runWorker, runRepairWorker, human, close: async () => { await model.close(); await desk.close(); await rm(root, { recursive: true, force: true }); } };
+    return { desk, model, a, b, root, commit, config, bare, repo, remote, report, work, decisions, runWorker, runRepairWorker, teamGet, human, close: async () => { await model.close(); await desk.close(); await rm(root, { recursive: true, force: true }); } };
   } catch (error) { await model.close(); await desk.close(); await rm(root, { recursive: true, force: true }); throw error; }
 }

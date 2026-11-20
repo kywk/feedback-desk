@@ -6,9 +6,10 @@ import type { Env } from '../env';
 import { config } from '../env';
 import type { Author, Creator } from './access';
 import { randomString, sha256Hex } from './crypto';
-import { placeholders } from './db';
+import { messageTarget, placeholders, type MessageTarget } from './db';
 import { CLIENT_VISIBLE_SQL, type Attachment, type ClientAccount, type Message, type Project, type Report, type Upload } from './models';
 import { claimStatements } from './uploads';
+import { customerReplyEvent } from './automation';
 
 export const MAX_TITLE = 160;
 export const MAX_DESCRIPTION = 10_000;
@@ -219,14 +220,15 @@ export interface StoredFile {
 }
 
 /** Statements that turn stored files into attachments of one message. */
-export function storedFileStatements(db: D1Database, reportId: number, messageId: number, files: StoredFile[], at: string, author?: Author): D1PreparedStatement[] {
+export function storedFileStatements(db: D1Database, reportId: number, messageId: MessageTarget, files: StoredFile[], at: string, author?: Author): D1PreparedStatement[] {
+    const message = messageTarget(messageId);
     return files.map((file) =>
         db
             .prepare(
                 `INSERT INTO attachments (report_id, message_id, kind, object_key, original_name, mime_type, size, uploader_client_account_id, uploader_developer_id, created_at)
-                 VALUES (?, ?, 'feedback', ?, ?, ?, ?, ?, ?, ?)`,
+                 VALUES (?, ${message.sql}, 'feedback', ?, ?, ?, ?, ?, ?, ?)`,
             )
-            .bind(reportId, messageId, file.object_key, file.original_name, file.mime_type, file.size, author?.clientAccountId ?? null, author?.developerId ?? null, at),
+            .bind(reportId, message.value, file.object_key, file.original_name, file.mime_type, file.size, author?.clientAccountId ?? null, author?.developerId ?? null, at),
     );
 }
 
@@ -243,29 +245,23 @@ export async function addMessage(
 ): Promise<{ id: number; status: ReportStatus; statusChanged: boolean }> {
     const db = env.DB;
     const at = nowIso(now);
-    const message = await db
-        .prepare(
+    const target = { justInsertedForReport: report.id };
+    const rule = data.applyStatusRule === false ? { next: null, statements: [] } : statusRuleStatements(db, report, data.author_type === 'owner', at, data.author);
+    const [inserted] = await db.batch<{ id: number }>([
+        db.prepare(
             'INSERT INTO messages (report_id, author_type, author_name, author_client_account_id, author_developer_id, author_agent, body, is_completion_request, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-        )
-        .bind(report.id, data.author_type, data.author_name, data.author?.clientAccountId ?? null, data.author?.developerId ?? null, data.author?.agent ?? null, data.body, data.isCompletionRequest ? 1 : 0, at, at)
-        .first<{ id: number }>();
+        ).bind(report.id, data.author_type, data.author_name, data.author?.clientAccountId ?? null, data.author?.developerId ?? null, data.author?.agent ?? null, data.body, data.isCompletionRequest ? 1 : 0, at, at),
+        ...claimStatements(db, data.uploads, { reportPublicId: report.public_id, kind: 'feedback', messageId: target, nowIso: at, author: data.author }),
+        ...storedFileStatements(db, report.id, target, data.storedFiles ?? [], at, data.author),
+        db.prepare('UPDATE reports SET latest_activity_at = ?, updated_at = ? WHERE id = ?').bind(at, at, report.id),
+        ...(data.author ? [eventStatement(db, report, 'message', data.author, at)] : []),
+        ...rule.statements,
+        ...(data.extraStatements ?? []),
+        ...(data.author_type === 'reporter' && report.creator_type === 'client' ? [customerReplyEvent(db, report.id, target, at)] : []),
+    ]);
+    const message = inserted.results[0];
     if (!message) {
         throw new Error('message insert returned no id');
-    }
-    const rule = data.applyStatusRule === false ? { next: null, statements: [] } : statusRuleStatements(db, report, data.author_type === 'owner', at, data.author);
-    try {
-        // Attachments point at the message by its own id.
-        await db.batch([
-            ...claimStatements(db, data.uploads, { reportPublicId: report.public_id, kind: 'feedback', messageId: message.id, nowIso: at, author: data.author }),
-            ...storedFileStatements(db, report.id, message.id, data.storedFiles ?? [], at, data.author),
-            db.prepare('UPDATE reports SET latest_activity_at = ?, updated_at = ? WHERE id = ?').bind(at, at, report.id),
-            ...(data.author ? [eventStatement(db, report, 'message', data.author, at)] : []),
-            ...rule.statements,
-            ...(data.extraStatements ?? []),
-        ]);
-    } catch (error) {
-        await db.prepare('DELETE FROM messages WHERE id = ?').bind(message.id).run();
-        throw error;
     }
     return { id: message.id, status: rule.next ?? report.status, statusChanged: rule.next !== null };
 }

@@ -1,7 +1,7 @@
 import type { Author } from './access';
 import type { Env } from '../env';
 import { randomId } from './crypto';
-import { placeholders } from './db';
+import { messageTarget, placeholders, type MessageTarget } from './db';
 import type { Upload, UploadPurpose } from './models';
 import { charSlice } from '../../shared/text';
 
@@ -195,19 +195,20 @@ export async function findClaimableUploads(
 export function claimStatements(
     db: D1Database,
     uploads: Upload[],
-    target: { reportPublicId: string; kind: 'feedback' | 'adjustment'; messageId?: number | null; nowIso: string; author?: Author },
+    target: { reportPublicId: string; kind: 'feedback' | 'adjustment'; messageId?: MessageTarget | null; nowIso: string; author?: Author },
 ): D1PreparedStatement[] {
     const statements: D1PreparedStatement[] = [];
+    const message = messageTarget(target.messageId);
     for (const upload of uploads) {
         statements.push(
             db
                 .prepare(
                     `INSERT INTO attachments (report_id, message_id, kind, object_key, original_name, mime_type, size, uploader_client_account_id, uploader_developer_id, created_at)
-                     VALUES ((SELECT id FROM reports WHERE public_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                     VALUES ((SELECT id FROM reports WHERE public_id = ?), ${message.sql}, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 )
                 .bind(
                     target.reportPublicId,
-                    target.messageId ?? null,
+                    message.value,
                     target.kind,
                     upload.object_key,
                     upload.original_name,

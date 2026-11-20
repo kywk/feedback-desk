@@ -7,7 +7,7 @@ node scripts/agents/consumer/cli.mjs
 node scripts/agents/consumer/cli.mjs --once
 ```
 
-預設持續輪詢，每輪最多領一件。`--once` 執行一輪，可用於排程與隔離測試。預設 handler 在確認領件與範圍後保存 `waiting_review`，原因是 `handler_not_configured`。工單原本的客戶狀態不會因而改變。
+預設持續輪詢，每輪最多領一件。`--once` 執行一輪，可用於排程與隔離測試。一般部署經 D1 輸入與處置介面執行 [W2 研判](../analysis/README.md)。缺少模型設定的研判工作會留下 `analysis_model_not_configured` 並進阻塞。
 
 | 環境變數 | 用途 |
 | --- | --- |
@@ -20,7 +20,7 @@ node scripts/agents/consumer/cli.mjs --once
 | `FEEDBACK_DESK_SCOPE_CONFIG` | [範圍設定](../scope/README.md) JSON 路徑 |
 | `FEEDBACK_DESK_SCOPE_AUDIT` | 本機範圍稽核 JSONL 路徑 |
 | `FEEDBACK_DESK_CONSUMER_STATE` | 本機持久游標與輪詢退避檔路徑，各個體使用自己的檔案 |
-| `FEEDBACK_DESK_CONSUMER_HANDLER` | 選填。管理員維護的本機 Node 模組路徑，以目前目錄解析相對路徑 |
+| `FEEDBACK_DESK_CONSUMER_HANDLER` | 選填。沿用 W1 的自訂流程時指定管理員維護的本機 Node 模組，以目前目錄解析相對路徑 |
 | `FEEDBACK_DESK_POLL_MS`、`FEEDBACK_DESK_HEARTBEAT_MS` | 選填。預設 3000／15000 毫秒，心跳最多 30000 毫秒 |
 | `FEEDBACK_DESK_RETRY_BASE_MS`、`FEEDBACK_DESK_MAX_ATTEMPTS` | 選填。預設 1000 毫秒與 4 次 |
 

@@ -1,4 +1,5 @@
 export const ANALYSIS_CLASSIFICATIONS: readonly ['explanation', 'needs_information', 'bug', 'change_request'];
+export const CUSTOMER_REVIEW_MARKER: '[需人工檢查]';
 export const ASSESSMENT_FACTORS: readonly ['cause_or_requirement', 'implementation', 'impact', 'scope_and_checks', 'verification'];
 
 export type AnalysisClassification = typeof ANALYSIS_CLASSIFICATIONS[number];

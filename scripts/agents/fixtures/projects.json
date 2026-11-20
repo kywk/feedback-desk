@@ -1,0 +1,32 @@
+[
+  {
+    "id": "todomvc",
+    "upstream": "https://github.com/tastejs/todomvc.git",
+    "commit": "ff43b02e59dfa604386bb382034b2cd07c2bcd8a",
+    "base_commit": "6b4c0ed422426e0252ed95dd065a2854d204b89c",
+    "include": ["examples/javascript-es5", "app-spec.md", "license.md"],
+    "read_paths": ["examples/javascript-es5/src", "app-spec.md"],
+    "allowed_paths": ["examples/javascript-es5/src"],
+    "checks": [
+      {
+        "id": "blank-title",
+        "argv": ["node", "-e", "global.window = {}; require('./examples/javascript-es5/src/model.js'); const out = []; const model = new window.app.Model({save: item => out.push(item)}); model.create('  '); model.create(' x '); require('node:assert/strict').deepEqual(out, [{title: 'x', completed: false}]);"]
+      }
+    ]
+  },
+  {
+    "id": "underscore",
+    "upstream": "https://github.com/jashkenas/underscore.git",
+    "commit": "d2e7e613a597bec6b16c946e42c91950dcc1a215",
+    "base_commit": "0c97491e52e33867681032e9b768453a1a8bd2a7",
+    "include": [],
+    "read_paths": ["modules", "test", "README.md"],
+    "allowed_paths": ["modules"],
+    "checks": [
+      {
+        "id": "collection-smoke",
+        "argv": ["node", "--input-type=module", "-e", "import assert from 'node:assert/strict'; import range from './modules/range.js'; import compact from './modules/compact.js'; assert.deepEqual(range(3, 0), [3, 2, 1]); assert.deepEqual(compact([0, 1, false, 2]), [1, 2]);"]
+      }
+    ]
+  }
+]

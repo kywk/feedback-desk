@@ -17,6 +17,8 @@
 3. 由 Worker 帳號在可持久化的私有儲存區預建 `recovery_directory`（如 `mkdir -m 700 /srv/feedback-worker/recovery`），路徑使用實際絕對路徑。與設定內的 repo 和文件目錄分開，並限制保留目錄的存取權。
 4. 在 W1 的 scope 設定中更新 `scope_revision`，在對應 repo 加上 `repair`。GitLab 模式可設定 `mode: "gitlab"`，未填時也沿用此模式。在 DMZ 的相同專案／環境及版本登錄 repo ID、基底分支、commit、允許的工作分支前綴、必要檢查 ID、GitLab 站台 ID、origin、project ID 及簽章密鑰參照。
 
+若 GitLab 使用私人 CA，在啟動 Worker 前將 `NODE_EXTRA_CA_CERTS`（GitLab API）與 `GIT_SSL_CAINFO`（Git HTTPS）指向 Worker 主機上的 CA PEM 檔案。兩個連線都會驗證 GitLab 憑證。
+
 以下是 `repositories` 陣列內的一個 repo 物件。請換成實際目錄、基底 commit、映像摘要與 GitLab 專案資料。
 
 ```json

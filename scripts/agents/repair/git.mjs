@@ -183,11 +183,13 @@ export async function commitRepair(tree, branch, base, indexTree, operation, sig
 }
 
 export function createGitTransport(tree, remote, gitlab, credential, signal, fixtureRemote) {
+    const caFile = process.env.GIT_SSL_CAINFO;
     const opt = {
         signal, timeout: 30_000,
         env: fixtureRemote ? { GIT_ALLOW_PROTOCOL: 'file' } : {
             GIT_ALLOW_PROTOCOL: 'https', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader',
             GIT_CONFIG_VALUE_0: 'Authorization: Basic ' + Buffer.from(gitlab.push_username + ':' + credential).toString('base64'),
+            ...(caFile && { GIT_SSL_CAINFO: caFile }),
         },
     };
     const endpoint = fixtureRemote ?? remote;

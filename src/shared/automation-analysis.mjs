@@ -12,6 +12,7 @@ const COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const EVIDENCE_REF = /^ev:[0-9a-f]{64}$/;
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
 const PRIVATE_PATH = /^(?:\.|id_(?:rsa|ed25519)|secrets?(?:[._-]|$)|credentials?(?:[._-]|$))|\.(?:pem|key|p12|pfx|keystore)$/i;
+export const CUSTOMER_REVIEW_MARKER = '[需人工檢查]';
 const NON_CUSTOMER_CONTENT = /(?:https?:\/\/|ssh:\/\/|\b(?:git|file):\/\/|\[[^\]\r\n]+\]\(|<\/?[A-Za-z]|\x60\x60\x60|\bev:[0-9a-f]{64}\b|\b(?:[0-9a-f]{40}|[0-9a-f]{64})\b|\b\S+\.git\b)/iu;
 const MASK = '[已遮罩]';
 const MAX_ANALYSIS_BYTES = 10_240;
@@ -146,7 +147,8 @@ export function redactAnalysisText(value) {
 }
 
 export function isSafeCustomerBody(value) {
-    return text(value, 1000) && value === redactAnalysisText(value) && !NON_CUSTOMER_CONTENT.test(value);
+    return text(value, 1000) && !value.includes(CUSTOMER_REVIEW_MARKER) &&
+        value === redactAnalysisText(value) && !NON_CUSTOMER_CONTENT.test(value);
 }
 
 export function canonicalProposalJson(proposal) {

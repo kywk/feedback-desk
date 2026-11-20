@@ -1,7 +1,10 @@
 export const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/;
 export const LEASE_FIELDS = ['worker_id', 'work_id', 'report_public_id', 'report_revision', 'lease_generation', 'scope_revision'];
 export const STAGES = new Set(['waiting_customer', 'waiting_review', 'blocked', 'completed']);
-const DENIALS = new Set(['unauthorized', 'scope_forbidden', 'scope_changed', 'lease_conflict', 'invalid_request']);
+const DENIALS = new Set([
+    'unauthorized', 'scope_forbidden', 'scope_changed', 'lease_conflict', 'invalid_request',
+    'operation_conflict', 'receipt_conflict', 'decision_conflict', 'mr_link_conflict',
+]);
 const MAX_RESPONSE_BYTES = 256 * 1024;
 
 export class QueueError extends Error {
@@ -136,6 +139,34 @@ export function createQueueClient(options) {
         async renew(lease, signal) {
             const result = await request('/renew', lease, signal);
             return validateWork(result?.work, identity, lease);
+        },
+        async input(lease, signal) {
+            const result = await request('/input', lease, signal);
+            if (!result?.work || !LEASE_FIELDS.every(key => lease[key] === result.work[key]) ||
+                !Number.isSafeInteger(result.work.input_revision) || result.work.input_revision < 1 ||
+                !Number.isSafeInteger(result.work.decision_revision) || result.work.decision_revision < 0 ||
+                !['analyze', 'repair'].includes(result.work.next_action) || result.report?.public_id !== lease.report_public_id) {
+                throw new QueueError('invalid_queue_response');
+            }
+            return result;
+        },
+        async decisions(lease, body, signal) {
+            const result = await request('/decisions', { ...body, ...lease }, signal);
+            if (result?.receipt?.operation_id !== body.operation_id ||
+                result.receipt.work_id !== lease.work_id || result.receipt.input_revision !== body.input_revision ||
+                typeof result.receipt.outcome !== 'string') throw new QueueError('invalid_queue_response');
+            return result;
+        },
+        intent(lease, body, signal) {
+            return request('/operations/intent', { ...body, ...lease }, signal);
+        },
+        receipt(lease, operationId, result, signal) {
+            return request('/operations/receipt', { ...lease, operation_id: operationId, result }, signal);
+        },
+        async mrLinks(lease, body, signal) {
+            const result = await request('/mr-links', { ...body, ...lease }, signal);
+            if (result?.receipt?.operation_id !== body.operation_id) throw new QueueError('invalid_queue_response');
+            return result;
         },
         async progress(lease, stage, progress, retryAt, signal) {
             const result = await request('/progress', {

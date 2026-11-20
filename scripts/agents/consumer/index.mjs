@@ -1,7 +1,8 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { createQueueClient, leaseOf, QueueError, retryDelay, STAGES } from './queue.mjs';
+import { createQueueClient, leaseOf, LEASE_FIELDS, QueueError, retryDelay, STAGES } from './queue.mjs';
 import { createCursorStore } from './state.mjs';
 import { ScopeError } from '../scope/index.mjs';
+import { AnalysisError } from '../../../src/shared/automation-analysis.mjs';
 
 const MAX_TIMER_MS = 2_147_483_647;
 const RETRYABLE_SCOPE = new Set([
@@ -88,6 +89,7 @@ function leaseGuard(queue, work, options, parentSignal, log) {
                 ensure();
                 setExpiry(result.lease_expires_at);
                 ensure();
+                return result;
             })
             .catch(error => {
                 lose(error instanceof QueueError ? error.code : 'renew_failed');
@@ -101,7 +103,7 @@ function leaseGuard(queue, work, options, parentSignal, log) {
     heartbeat = setInterval(() => { Promise.resolve().then(renew).catch(() => {}); }, options.heartbeatMs);
 
     return {
-        signal, ensure, renew,
+        signal, ensure, renew, lose,
         async stopHeartbeat() {
             clearInterval(heartbeat);
             if (renewal) await renewal;
@@ -147,10 +149,53 @@ function failure(error) {
     if (error instanceof RetryableWorkError) return { reason: error.code, retryable: true, after: error.retryAfterMs };
     if (error instanceof ScopeError) return { reason: error.code, retryable: RETRYABLE_SCOPE.has(error.code) };
     if (error instanceof QueueError) return { reason: error.code, retryable: error.retryable, after: error.retryAfterMs };
+    if (error instanceof AnalysisError) return { reason: error.code, retryable: false };
+    if (error?.name === 'RepairError' && /^[a-z0-9_]{1,48}$/.test(error.code ?? '')) {
+        return { reason: error.code, retryable: error.retryable === true, after: error.retryAfterMs };
+    }
     return { reason: 'handler_failed', retryable: false };
 }
 
-async function runWork(queue, work, scopeAccess, handleWork, options, parentSignal, log) {
+function workflowQueue(queue, claim, lease, scope, options, ensureHandler) {
+    const credentials = leaseOf(claim);
+    const transition = { attempted: false, receipt: undefined };
+
+    async function call(method, supplied, values, terminal = false) {
+        ensureHandler();
+        if (transition.attempted || !LEASE_FIELDS.every(field => supplied?.[field] === credentials[field])) {
+            throw new QueueError('invalid_workflow_lease');
+        }
+        await guardResult(scope.validate(), lease.signal);
+        ensureHandler();
+        try {
+            if (method === 'renew') return await lease.renew();
+            if (terminal) {
+                await lease.stopHeartbeat();
+                ensureHandler();
+                transition.attempted = true;
+            }
+            const result = await retryRequest(
+                () => queue[method](credentials, ...values, lease.signal), options, lease.signal,
+            );
+            if (terminal) transition.receipt = result.receipt;
+            return result;
+        } catch (error) {
+            if (fenced(error)) lease.lose(error.code);
+            throw error;
+        }
+    }
+
+    return { transition, api: Object.freeze({
+        input: work => call('input', work, []),
+        renew: work => call('renew', work, []),
+        intent: (work, body) => call('intent', work, [body]),
+        receipt: (work, id, result) => call('receipt', work, [id, result]),
+        decisions: (work, body) => call('decisions', work, [body], true),
+        mrLinks: (work, body) => call('mrLinks', work, [body], true),
+    }) };
+}
+
+async function runWork(queue, work, scopeAccess, handleWork, workflow, options, parentSignal, log) {
     const workLog = (event, fields) => log(event, { work_id: work.work_id, lease_generation: work.lease_generation, ...fields });
     const lease = leaseGuard(queue, work, options, parentSignal, workLog);
     workLog('work_claimed', { stage: work.stage });
@@ -203,6 +248,15 @@ async function runWork(queue, work, scopeAccess, handleWork, options, parentSign
             return result;
         }
         const tools = Object.freeze({
+            ...(workflow && {
+                async validate() {
+                    ensureHandler();
+                    await lease.renew();
+                    ensureHandler();
+                    await guardResult(scope.validate(), lease.signal);
+                    ensureHandler();
+                },
+            }),
             async execute(request) {
                 ensureHandler();
                 await lease.renew();
@@ -216,27 +270,35 @@ async function runWork(queue, work, scopeAccess, handleWork, options, parentSign
             },
         });
 
+        const jobQueue = workflow && workflowQueue(queue, work, lease, scope, options, ensureHandler);
+        const handler = workflow ?? handleWork;
         let outcome;
         try {
             lease.ensure();
             await guardResult(scope.validate(), lease.signal);
             await lease.save('running', envelope());
-            if (!handleWork) outcome = { stage: 'waiting_review', reason: 'handler_not_configured' };
+            if (!handler) outcome = { stage: 'waiting_review', reason: 'handler_not_configured' };
             else {
                 accepting = true;
                 workLog('work_started', { attempt });
                 const result = await guardResult(Promise.resolve().then(() => {
                     ensureHandler();
-                    return handleWork({
+                    return handler({
                         work: Object.freeze({
                             ...leaseOf(work), event_id: work.event_id, correlation_id: work.event_id,
                             stage: work.stage, project_slug: queue.scope.project_slug, environment: queue.scope.environment,
                         }),
                         progress: objectProgress(progress),
-                        checkpoint, tools, signal: lease.signal,
+                        checkpoint, tools, signal: lease.signal, ...(jobQueue && { queue: jobQueue.api }),
                     });
                 }), lease.signal);
                 accepting = false;
+                if (jobQueue?.transition.receipt) {
+                    const receipt = jobQueue.transition.receipt;
+                    workLog('work_transitioned', { operation_id: receipt.operation_id });
+                    return;
+                }
+                if (jobQueue?.transition.attempted) throw new QueueError('work_transition_unconfirmed');
                 await guardResult(checkpoints, lease.signal);
                 if (checkpointError) throw checkpointError;
                 if (!STAGES.has(result?.stage)) throw new Error('invalid_handler_result');
@@ -247,6 +309,7 @@ async function runWork(queue, work, scopeAccess, handleWork, options, parentSign
             }
         } catch (error) {
             accepting = false;
+            if (jobQueue?.transition.attempted) throw error;
             lease.ensure();
             await guardResult(checkpoints, lease.signal);
             const { reason, retryable, after } = failure(checkpointError ?? error);
@@ -270,7 +333,7 @@ async function runWork(queue, work, scopeAccess, handleWork, options, parentSign
 }
 
 export async function runConsumer({
-    statePath, scopeAccess, handleWork, signal = new AbortController().signal, once = false,
+    statePath, scopeAccess, handleWork, workflow, signal = new AbortController().signal, once = false,
     log = () => {}, pollMs = 3000, heartbeatMs = 15_000, retryBaseMs = 1000, maxAttempts = 4,
     ...queueOptions
 }) {
@@ -322,7 +385,7 @@ export async function runConsumer({
                 state = { ...state, poll_failures: 0, poll_retry_at: 0 };
                 await store.save(state);
             }
-            if (work) await runWork(queue, work, scopeAccess, handleWork, options, signal, log);
+            if (work) await runWork(queue, work, scopeAccess, handleWork, workflow, options, signal, log);
             if (!once) await pause(pollMs, signal);
         } while (!once);
     } catch (error) {

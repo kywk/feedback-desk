@@ -4,6 +4,9 @@ import { pathToFileURL } from 'node:url';
 import { createScopeAccess } from '../scope/index.mjs';
 import { runConsumer } from './index.mjs';
 import { QueueError } from './queue.mjs';
+import { AnalysisError } from '../../../src/shared/automation-analysis.mjs';
+import { createAnalysisHandler } from '../analysis/index.mjs';
+import { createTextModelAdapter } from '../analysis/model.mjs';
 
 function log(event, fields = {}) {
     process.stdout.write(JSON.stringify({ at: new Date().toISOString(), event, ...fields }) + '\n');
@@ -35,6 +38,38 @@ async function loadHandler(path) {
     }
 }
 
+async function loadWorkflow(configPath, auditPath) {
+    const { FEEDBACK_DESK_ANALYSIS_ADAPTER: adapter, FEEDBACK_DESK_ANALYSIS_MODEL_URL: endpoint,
+        FEEDBACK_DESK_ANALYSIS_MODEL: model, FEEDBACK_DESK_ANALYSIS_MODEL_TOKEN: token } = process.env;
+    let analyze;
+    if (adapter || endpoint || model || token) {
+        try {
+            if (adapter) {
+                const module = await import(pathToFileURL(resolve(adapter)).href);
+                if (typeof module.analyze !== 'function') throw new Error();
+                analyze = module.analyze;
+            } else {
+                analyze = createTextModelAdapter({ endpoint, model, token });
+            }
+        } catch {
+            analyze = () => { throw new AnalysisError('analysis_model_config_invalid'); };
+        }
+    }
+    return createAnalysisHandler({
+        configPath, auditPath, analyze,
+        async runRepair(input) {
+            let createRepairHandler;
+            try {
+                ({ createRepairHandler } = await import('../repair/index.mjs'));
+                if (typeof createRepairHandler !== 'function') throw new Error();
+            } catch {
+                throw new AnalysisError('repair_handler_not_configured');
+            }
+            return createRepairHandler({ configPath })(input);
+        },
+    });
+}
+
 async function main(args, signal) {
     if (args.length === 1 && args[0] === '--help') {
         process.stdout.write('Usage: node scripts/agents/consumer/cli.mjs [--once]\n');
@@ -55,10 +90,11 @@ async function main(args, signal) {
         throw new Error('consumer_paths_overlap');
     }
     const handleWork = await loadHandler(process.env.FEEDBACK_DESK_CONSUMER_HANDLER);
+    const workflow = handleWork ? undefined : await loadWorkflow(configPath, auditPath);
     await runConsumer({
         baseUrl, token, projectSlug, environment, scopeRevision, workerId, statePath,
         scopeAccess: createScopeAccess({ configPath, auditPath }),
-        handleWork, once, signal, log,
+        handleWork, workflow, once, signal, log,
         pollMs: integerEnv('FEEDBACK_DESK_POLL_MS', 3000, 3_600_000),
         heartbeatMs: integerEnv('FEEDBACK_DESK_HEARTBEAT_MS', 15_000, 30_000),
         retryBaseMs: integerEnv('FEEDBACK_DESK_RETRY_BASE_MS', 1000, 60_000),

@@ -1,0 +1,144 @@
+{
+  "steps": [
+    {
+      "name": "claim",
+      "method": "POST",
+      "path": "/api/automation/${project_slug}/${environment}/claim",
+      "body": {
+        "worker_id": "${worker_id}",
+        "scope_revision": "${scope_revision}"
+      },
+      "status": 200,
+      "exists": [
+        "work.work_id",
+        "work.report_public_id",
+        "work.report_revision",
+        "work.lease_generation",
+        "work.scope_revision",
+        "work.stage"
+      ],
+      "equals": {
+        "work.report_public_id": "${report_public_id}",
+        "work.scope_revision": "${scope_revision}"
+      },
+      "capture": {
+        "work": "work"
+      }
+    },
+    {
+      "name": "intent acknowledged but response lost",
+      "method": "POST",
+      "path": "/api/automation/${project_slug}/${environment}/operations/intent",
+      "body": {
+        "worker_id": "${worker_id}",
+        "work_id": "${work.work_id}",
+        "report_public_id": "${work.report_public_id}",
+        "report_revision": "${work.report_revision}",
+        "lease_generation": "${work.lease_generation}",
+        "scope_revision": "${work.scope_revision}",
+        "operation_id": "${operation_id}",
+        "correlation_id": "${correlation_id}",
+        "operation_type": "${operation_type}",
+        "payload": "${payload}"
+      },
+      "status": 200,
+      "discard_response": true
+    },
+    {
+      "name": "replay same intent",
+      "method": "POST",
+      "path": "/api/automation/${project_slug}/${environment}/operations/intent",
+      "body": {
+        "worker_id": "${worker_id}",
+        "work_id": "${work.work_id}",
+        "report_public_id": "${work.report_public_id}",
+        "report_revision": "${work.report_revision}",
+        "lease_generation": "${work.lease_generation}",
+        "scope_revision": "${work.scope_revision}",
+        "operation_id": "${operation_id}",
+        "correlation_id": "${correlation_id}",
+        "operation_type": "${operation_type}",
+        "payload": "${payload}"
+      },
+      "status": 200,
+      "exists": [
+        "intent"
+      ]
+    },
+    {
+      "name": "changed payload conflicts",
+      "method": "POST",
+      "path": "/api/automation/${project_slug}/${environment}/operations/intent",
+      "body": {
+        "worker_id": "${worker_id}",
+        "work_id": "${work.work_id}",
+        "report_public_id": "${work.report_public_id}",
+        "report_revision": "${work.report_revision}",
+        "lease_generation": "${work.lease_generation}",
+        "scope_revision": "${work.scope_revision}",
+        "operation_id": "${operation_id}",
+        "correlation_id": "${correlation_id}",
+        "operation_type": "${operation_type}",
+        "payload": {
+          "different": true
+        }
+      },
+      "status": 409
+    },
+    {
+      "name": "receipt acknowledged but response lost",
+      "method": "POST",
+      "path": "/api/automation/${project_slug}/${environment}/operations/receipt",
+      "body": {
+        "worker_id": "${worker_id}",
+        "work_id": "${work.work_id}",
+        "report_public_id": "${work.report_public_id}",
+        "report_revision": "${work.report_revision}",
+        "lease_generation": "${work.lease_generation}",
+        "scope_revision": "${work.scope_revision}",
+        "operation_id": "${operation_id}",
+        "result": "${result}"
+      },
+      "status": 200,
+      "discard_response": true
+    },
+    {
+      "name": "receipt replay",
+      "method": "POST",
+      "path": "/api/automation/${project_slug}/${environment}/operations/receipt",
+      "body": {
+        "worker_id": "${worker_id}",
+        "work_id": "${work.work_id}",
+        "report_public_id": "${work.report_public_id}",
+        "report_revision": "${work.report_revision}",
+        "lease_generation": "${work.lease_generation}",
+        "scope_revision": "${work.scope_revision}",
+        "operation_id": "${operation_id}",
+        "result": "${result}"
+      },
+      "status": 200,
+      "capture": {
+        "receipt": "receipt"
+      }
+    },
+    {
+      "name": "receipt replay returns same result",
+      "method": "POST",
+      "path": "/api/automation/${project_slug}/${environment}/operations/receipt",
+      "body": {
+        "worker_id": "${worker_id}",
+        "work_id": "${work.work_id}",
+        "report_public_id": "${work.report_public_id}",
+        "report_revision": "${work.report_revision}",
+        "lease_generation": "${work.lease_generation}",
+        "scope_revision": "${work.scope_revision}",
+        "operation_id": "${operation_id}",
+        "result": "${result}"
+      },
+      "status": 200,
+      "equals": {
+        "receipt": "${receipt}"
+      }
+    }
+  ]
+}

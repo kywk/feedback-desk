@@ -1,0 +1,71 @@
+{
+  "steps": [
+    {
+      "name": "worker A claims",
+      "method": "POST",
+      "path": "/api/automation/${project_slug}/${environment}/claim",
+      "body": {
+        "worker_id": "${worker_id}",
+        "scope_revision": "${scope_revision}"
+      },
+      "status": 200,
+      "exists": [
+        "work.work_id",
+        "work.lease_generation",
+        "work.report_revision",
+        "work.report_public_id",
+        "work.scope_revision"
+      ],
+      "capture": {
+        "work": "work"
+      }
+    },
+    {
+      "name": "worker B cannot claim leased work",
+      "method": "POST",
+      "path": "/api/automation/${project_slug}/${environment}/claim",
+      "body": {
+        "worker_id": "${worker_b}",
+        "scope_revision": "${scope_revision}"
+      },
+      "status": 200,
+      "equals": {
+        "work": null
+      }
+    },
+    {
+      "name": "wait for lease expiry",
+      "sleep_ms": "${lease_wait_ms}"
+    },
+    {
+      "name": "worker B takes over",
+      "method": "POST",
+      "path": "/api/automation/${project_slug}/${environment}/claim",
+      "body": {
+        "worker_id": "${worker_b}",
+        "scope_revision": "${scope_revision}"
+      },
+      "status": 200,
+      "equals": {
+        "work.work_id": "${work.work_id}"
+      },
+      "capture": {
+        "replacement": "work"
+      }
+    },
+    {
+      "name": "old worker cannot renew",
+      "method": "POST",
+      "path": "/api/automation/${project_slug}/${environment}/renew",
+      "body": {
+        "worker_id": "${worker_id}",
+        "work_id": "${work.work_id}",
+        "report_public_id": "${work.report_public_id}",
+        "report_revision": "${work.report_revision}",
+        "lease_generation": "${work.lease_generation}",
+        "scope_revision": "${work.scope_revision}"
+      },
+      "status": 409
+    }
+  ]
+}

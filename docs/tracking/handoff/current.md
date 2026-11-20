@@ -8,4 +8,6 @@ W2-01～04 已整合至本機 `main`。QA 在產品版本 `94dc54b` 完成型別
 
 **W2-04 已在本機隔離 GitLab 建立真實 MR。** 產品提交 `de632ed` 使用 GitLab CE 19.6.1 的私有專案 `root/w2-todomvc`（ID 1），以本機 TodoMVC 的 main 為基底。開發驗收查回 [MR !1](https://localhost:18443/root/w2-todomvc/-/merge_requests/1)，並核對相同工單重送仍對應同一張 MR。[設定、重跑方式與證據](../devlog/w2.md#本機-gitlab-ce-實機驗收)
 
-W3 第一批已啟動兩端介面盤點。下一步固定巡檢來源與機器身分、終態證據、環境與收據契約，再依 Wave 計畫分工實作。[W3 第一批](../devlog/w3.md)
+**W3 已完成。** Feedback Desk 產品 `42db763`、實機驗收 `8e3266e`，Whippet 產品 `bdb2724`、最終測試修正 `8843131`，均已整合至本機 main。兩筆真實 QA 巡檢失敗連到同一張團隊單，stage 分單。成功、Runner 中斷與草稿驗證失敗皆未觸發建單。QA 驗過發布權限、重送、跨服務可用性，並重開 D1 後從 Run 頁面點回原單。[完整指令、Run 與收據證據](../devlog/w3.md#最終驗收證據) · [本機啟動與存取](../devlog/w3.md#本機驗收環境)
+
+**下一波為 W4 部署後重測。** 從 W4-01／02／03 的共用契約開始，先固定可信部署識別、實際上線 revision、環境與已發布測試版本。可沿用 W2 本機 GitLab 的 MR／commit 與 W3 既有 Run、受限身分及團隊單；需由部署來源證實上線版本後才排重測。W4 尚未執行。[Wave 計畫](../waves.md)

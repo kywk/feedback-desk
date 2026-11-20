@@ -4,6 +4,13 @@ import { messageTarget, type MessageTarget } from './db';
 export const SQL_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 const SQL_LEASE_END = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+60 seconds')";
 const EVENT_PAGE_SIZE = 100;
+export const WORK_INGRESS_ENABLED = `CASE w.ingress_kind WHEN 'inspection' THEN s.inspection_ingress=1 AND EXISTS (
+    SELECT 1 FROM automation_inspection_groups g
+    JOIN automation_inspection_targets t ON t.project_id=g.project_id AND t.environment=g.environment
+        AND t.source_instance=g.source_instance AND t.workspace_id=g.workspace_id AND t.test_id=g.test_id AND t.check_key=g.check_key
+    WHERE g.report_public_id=w.report_public_id AND g.project_id=w.project_id AND g.environment=w.environment
+        AND g.closed_at IS NULL AND t.scope_revision=s.scope_revision
+) ELSE s.customer_ingress=1 END`;
 
 export const AUTOMATION_STAGES = ['queued', 'running', 'waiting_customer', 'waiting_review', 'blocked', 'completed'] as const;
 type Stage = (typeof AUTOMATION_STAGES)[number];
@@ -28,9 +35,17 @@ export interface Lease {
 }
 
 export class AutomationError extends Error {
-    constructor(readonly code: string, readonly status: 400 | 401 | 403 | 409, message: string) {
+    constructor(readonly code: string, readonly status: 400 | 401 | 403 | 409 | 503, message: string) {
         super(message);
     }
+}
+
+export function assertion(db: D1Database, predicate: string, values: (number | string | null)[]): D1PreparedStatement {
+    return db.prepare(`INSERT INTO automation_assertion (valid) SELECT 0 WHERE NOT (${predicate})`).bind(...values);
+}
+
+export function failedAutomationAssertion(error: unknown): boolean {
+    return error instanceof Error && error.message.includes('CHECK constraint failed: automation_guard');
 }
 
 export async function automationScope(db: D1Database, authorization: string | undefined, projectSlug: string, environment: string): Promise<AutomationScope> {
@@ -83,6 +98,7 @@ interface EventRow {
     cursor: number;
     event_id: string;
     event_type: string;
+    ingress_kind: 'customer' | 'inspection';
     report_public_id: string;
     report_revision: number;
     message_id: number | null;
@@ -92,7 +108,7 @@ interface EventRow {
 
 export async function listAutomationEvents(db: D1Database, scope: AutomationScope, after: number) {
     const { results } = await db.prepare(
-        `SELECT cursor, event_id, event_type, report_public_id, report_revision, message_id, occurred_at, ignored_reason
+        `SELECT cursor, event_id, event_type, ingress_kind, report_public_id, report_revision, message_id, occurred_at, ignored_reason
          FROM automation_events e
          JOIN automation_scopes s USING (project_id, environment)
          JOIN automation_tokens t USING (project_id, environment)
@@ -112,6 +128,7 @@ export async function listAutomationEvents(db: D1Database, scope: AutomationScop
             payload: {
                 report_public_id: row.report_public_id,
                 report_revision: row.report_revision,
+                ...(row.ingress_kind === 'inspection' ? { ingress_kind: row.ingress_kind } : {}),
                 ...(row.message_id === null ? {} : { message_id: row.message_id }),
             },
             ...(row.ignored_reason === null ? {} : { ignored_reason: row.ignored_reason }),
@@ -154,7 +171,7 @@ export const ACTIVE_LEASE = `
         JOIN automation_tokens t ON t.project_id = s.project_id AND t.environment = s.environment
         WHERE r.project_id = w.project_id AND r.public_id = w.report_public_id AND r.report_revision = w.report_revision
             AND r.client_deleted_at IS NULL AND r.status <> 'completed' AND r.claimed_by_developer_id IS NULL AND r.automation_manual_takeover = 0
-            AND s.environment = w.environment AND s.scope_revision = w.scope_revision AND s.enabled = 1 AND s.customer_ingress = 1
+            AND s.environment = w.environment AND s.scope_revision = w.scope_revision AND s.enabled = 1 AND ${WORK_INGRESS_ENABLED}
             AND t.token_hash = w.lease_token_hash AND t.revoked_at IS NULL
     )`;
 
@@ -185,7 +202,7 @@ export async function claimAutomationWork(db: D1Database, scope: AutomationScope
              JOIN automation_scopes s ON s.project_id = w.project_id AND s.environment = w.environment
              JOIN automation_tokens t ON t.project_id = s.project_id AND t.environment = s.environment
              WHERE w.project_id = ?1 AND w.environment = ?2 AND w.scope_revision = ?3
-                 AND s.scope_revision = w.scope_revision AND s.enabled = 1 AND s.customer_ingress = 1
+                 AND s.scope_revision = w.scope_revision AND s.enabled = 1 AND ${WORK_INGRESS_ENABLED}
                  AND t.token_hash = ?4 AND t.revoked_at IS NULL
                  AND w.revoked_reason IS NULL AND w.stage IN ('queued', 'running')
                  AND (w.retry_at IS NULL OR w.retry_at <= ${SQL_NOW})

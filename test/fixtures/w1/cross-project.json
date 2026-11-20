@@ -1,0 +1,9 @@
+{
+  "steps": [
+    {
+      "name": "A credential rejected for B",
+      "path": "/api/automation/${other_project_slug}/${environment}/events?after=0",
+      "status": 403
+    }
+  ]
+}

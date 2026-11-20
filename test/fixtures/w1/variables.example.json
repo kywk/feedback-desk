@@ -1,0 +1,20 @@
+{
+  "project_slug": "w1-qa-a",
+  "other_project_slug": "w1-qa-b",
+  "environment": "qa",
+  "scope_revision": "w1-a-r1",
+  "worker_id": "w1-qa-worker-a",
+  "worker_b": "w1-qa-worker-b",
+  "report_public_id": "REPLACE_WITH_CUSTOMER_REPORT_ID",
+  "cursor": "0",
+  "lease_wait_ms": 120000,
+  "operation_id": "w1-qa-operation-unique",
+  "correlation_id": "w1-qa-correlation-unique",
+  "operation_type": "REPLACE_WITH_SUPPORTED_OPERATION_TYPE",
+  "payload": {
+    "qa": "fixture"
+  },
+  "result": {
+    "qa": "fixture"
+  }
+}

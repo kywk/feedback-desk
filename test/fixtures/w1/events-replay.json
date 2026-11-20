@@ -1,0 +1,28 @@
+{
+  "steps": [
+    {
+      "name": "read events",
+      "path": "/api/automation/${project_slug}/${environment}/events?after=${cursor}",
+      "status": 200,
+      "exists": [
+        "events",
+        "next_cursor"
+      ],
+      "capture": {
+        "next_cursor": "next_cursor"
+      }
+    },
+    {
+      "name": "repeat same cursor",
+      "path": "/api/automation/${project_slug}/${environment}/events?after=${cursor}",
+      "status": 200,
+      "exists": [
+        "events",
+        "next_cursor"
+      ],
+      "equals": {
+        "next_cursor": "${next_cursor}"
+      }
+    }
+  ]
+}

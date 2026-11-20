@@ -51,8 +51,9 @@ export function createClient({ service, origin, token, fetchImpl, signal, maxAtt
                 signal.throwIfAborted();
                 const response = await fetchImpl(new URL(path, origin), {
                     method: data === undefined ? 'GET' : 'POST',
+                    cache: 'no-store',
                     headers: {
-                        authorization: 'Bearer ' + token,
+                        ...(token === undefined ? {} : { authorization: 'Bearer ' + token }),
                         accept: 'application/json',
                         ...(data === undefined ? {} : { 'content-type': 'application/json' }),
                     },

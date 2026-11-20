@@ -3,6 +3,7 @@ import { lstat, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { readBoundedPath, requireScope, ScopeError } from './policy.mjs';
+import { inspectLocalRepository, verifyLocalRefPaths } from './local-repository.mjs';
 
 const exec = promisify(execFile);
 const MAX_TEXT_BYTES = 64 * 1024;
@@ -62,6 +63,10 @@ async function gitText(directory, ...args) {
 async function verifyRepository(repo) {
     const { directory, base_branch, base_commit } = repo;
     const gitDir = join(directory, '.git');
+    if (repo.repair?.mode === 'local') {
+        await inspectLocalRepository(repo);
+        await verifyLocalRefPaths(gitDir, base_branch);
+    }
     requireScope((await lstat(gitDir)).isDirectory() &&
         await realpath(directory) === directory, 'repository_not_allowed');
     const location = await gitText(directory, 'rev-parse', '--path-format=absolute',

@@ -1,13 +1,21 @@
 # W2 修復 Worker
 
-內網 consumer 收到 `next_action: repair` 時，會從同一租約重新取得 `repair_authorization`，核對目前的工單輸入、方案摘要、核准及範圍版本。修復會套用方案中的既有檔案文字替換，檢查通過後建立工作分支並提交 MR。Worker 只回寫 GitLab API 查到的 MR，工單等團隊審查或可信部署。
+內網 consumer 收到 `next_action: repair` 時，會從同一租約重新取得 `repair_authorization`，核對目前的工單輸入、方案摘要、核准及範圍版本。修復會套用方案中的既有檔案文字替換。檢查通過後，依專案的交付模式將工作分支保存到本機裸庫，或推送到 GitLab 並查回 MR。工單等團隊審查或可信部署。
 
-## 設定受管測試專案
+## 本機交付
+
+這個模式適用於先在本機審閱修正。準備由 Worker 管理的 clone 和獨立的裸庫，將 clone 的 `origin` 與 scope 設定內的 `remote` 設為同一個實際絕對路徑的 `file://` URL。例如 `file:///srv/feedback-worker/test-app.git`。工作庫和裸庫應使用一般 Git 目錄及無轉指的物件與 ref 儲存。請把受管 `base_branch` 與 `base_commit` 放進兩個庫，並限制檔案系統存取權。
+
+在對應的 scope repo 下設定 `repair.mode: "local"`，保留後述的 `allowed_paths`、`branch_prefix`、`recovery_directory`、`checks` 和 `test_image`，省略 `gitlab`。DMZ 登記相同版本與 repo 的 `delivery_mode: "local"`、基底、分支前綴及檢查 ID。本機模式只需既有的 Feedback Desk consumer 憑證。Worker 以本機 Git 物件與 refs 儲存將 commit 寫入核准的裸庫，保留基底分支與來源 clone，並回報 `local_branch_ready` 給團隊審查。
+
+在 Worker 主機以 `git --git-dir <裸庫絕對路徑> show <head_sha>` 查閱內容；確認基底分支、來源分支與 commit 後，再依團隊既有流程處理。若收據回應遺失，consumer 會重送相同的操作並核對裸庫內的分支 HEAD。
+
+## 設定 GitLab 交付
 
 1. 在內網 Worker 準備專用帳號、Git、tar、Node.js 20+ 及本機 Docker。Worker 帳號需可獨立使用 Docker，模型與檢查程式只可接觸各自的工具介面。準備內含 `/bin/sh`、`tar`、語言工具及已安裝相依套件的可信映像，在本機載入並以 SHA-256 摘要固定版本。
 2. 使用專用 GitLab 測試專案。準備獨立 clone，其 `origin` 使用下列精確的 HTTPS URL，並保留核准的本機基底分支與 commit。GitLab 專案的來源、目標須屬於同一 project ID。把基底分支設為受保護分支，讓自動化身分只能在核准的工作分支前綴建立分支及 MR。
 3. 由 Worker 帳號在可持久化的私有儲存區預建 `recovery_directory`（如 `mkdir -m 700 /srv/feedback-worker/recovery`），路徑使用實際絕對路徑。與設定內的 repo 和文件目錄分開，並限制保留目錄的存取權。
-4. 在 W1 的 scope 設定中更新 `scope_revision`，在對應 repo 加上 `repair`。在 DMZ 的相同專案／環境及版本登錄 repo ID、基底分支、commit、允許的工作分支前綴、必要檢查 ID、GitLab 站台 ID、origin、project ID 及簽章密鑰參照。
+4. 在 W1 的 scope 設定中更新 `scope_revision`，在對應 repo 加上 `repair`。GitLab 模式可設定 `mode: "gitlab"`，未填時也沿用此模式。在 DMZ 的相同專案／環境及版本登錄 repo ID、基底分支、commit、允許的工作分支前綴、必要檢查 ID、GitLab 站台 ID、origin、project ID 及簽章密鑰參照。
 
 以下是 `repositories` 陣列內的一個 repo 物件。請換成實際目錄、基底 commit、映像摘要與 GitLab 專案資料。
 

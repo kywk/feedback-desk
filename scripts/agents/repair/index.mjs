@@ -3,13 +3,16 @@ import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { leaseOf, QueueError } from '../consumer/queue.mjs';
 import { requireScope, ScopeError } from '../scope/policy.mjs';
+import { inspectLocalRepository, verifyLocalRefPaths } from '../scope/local-repository.mjs';
 import { applyEdits, commitRepair, createGitTransport, withWorktree } from './git.mjs';
 import { archiveWorktree, verifyInContainer } from './checks.mjs';
 import { createGitLab, signObservation } from './gitlab.mjs';
+import { localBranchStorage } from './local.mjs';
 import { assertCurrentAuthorization, canonicalJson, createRepairScope, hash, resolveRepairSecret } from './policy.mjs';
 
 const PUSH = 'git.push_branch';
 const CREATE_MR = 'gitlab.create_merge_request';
+const LOCAL_BRANCH = 'git.local_branch';
 
 function assertIntent(data, operationId, correlationId, type) {
     const intent = data?.intent;
@@ -76,6 +79,25 @@ async function openMergeRequest({ gitLab, transport, payload, recordIntent, fenc
     });
 }
 
+async function publishLocalBranch({ storage, observation, recordIntent, fenceWrite, queue, lease, signal, phase }) {
+    await phase('local_branch', { head_sha: observation.head_sha });
+    const intent = await recordIntent(LOCAL_BRANCH);
+    const { source_branch, head_sha } = observation;
+    const actual = await storage.head(source_branch);
+    if (actual === null && intent.status === 'pending') {
+        await storage.install(observation, fenceWrite);
+    }
+
+    await phase('record_local_branch', { head_sha });
+    await fenceWrite();
+    requireScope(await storage.head(source_branch) === head_sha, 'local_branch_changed');
+    const result = await queue.localBranches(lease, { operation_id: intent.operation_id, observation }, signal);
+    const receipt = result?.receipt;
+    requireScope(receipt?.operation_id === intent.operation_id && receipt.work_id === lease.work_id &&
+        receipt.outcome === 'local_branch_ready' && receipt.head_sha === head_sha, 'local_branch_receipt_mismatch');
+    return result;
+}
+
 export function createRepairHandler({ configPath }, {
     fetchImpl = globalThis.fetch,
     resolveSecret = ref => process.env[ref],
@@ -102,14 +124,19 @@ export function createRepairHandler({ configPath }, {
         }
 
         await verifyAuthorization();
-        const { repo, config, checks, gitlab } = await current();
+        const { repo, config, checks, mode, gitlab } = await current();
+        let local;
+        if (mode === 'local') {
+            local = await inspectLocalRepository(repo);
+            await verifyLocalRefPaths(join(repo.directory, '.git'), repo.base_branch);
+        }
         const correlationId = work.event_id;
         const repairId = hash(canonicalJson([
             work.project_slug, work.environment, work.work_id, work.scope_revision, authorization.input_revision,
             authorization.proposal_revision, authorization.proposal_digest,
         ]));
         const sourceBranch = config.branch_prefix + repairId.slice(0, 32);
-        const mrOperation = 'repair-mr:' + repairId;
+        const deliveryOperation = (mode === 'local' ? 'repair-local:' : 'repair-mr:') + repairId;
         return withWorktree(repo, sourceBranch, config.recovery_directory, signal, async ({ directory, tree }) => {
             const recoveryId = basename(directory);
             const phase = (name, fields = {}) => checkpoint({
@@ -137,20 +164,25 @@ export function createRepairHandler({ configPath }, {
             }
 
             await verifyAuthorization();
-            const commit = await commitRepair(tree, sourceBranch, repo.base_commit, indexTree, mrOperation, signal);
+            const commit = await commitRepair(tree, sourceBranch, repo.base_commit, indexTree, deliveryOperation, signal);
             const payload = {
                 proposal_revision: authorization.proposal_revision, proposal_digest: authorization.proposal_digest,
                 input_revision: authorization.input_revision, repo_id: repo.id, base_commit: repo.base_commit,
-                gitlab_instance_id: gitlab.instance_id, project_id: gitlab.project_id, source_branch: sourceBranch,
-                target_branch: repo.base_branch, head_sha: commit, check_results: checkResults,
+                source_branch: sourceBranch, target_branch: repo.base_branch, head_sha: commit, check_results: checkResults,
+                ...(gitlab && { gitlab_instance_id: gitlab.instance_id, project_id: gitlab.project_id }),
             };
             async function recordIntent(type) {
                 await verifyAuthorization();
-                const id = type === PUSH ? 'repair-push:' + repairId : mrOperation;
+                const id = type === PUSH ? 'repair-push:' + repairId : deliveryOperation;
                 const data = await queue.intent(lease, {
                     operation_id: id, correlation_id: correlationId, operation_type: type, payload,
                 }, signal);
                 return assertIntent(data, id, correlationId, type);
+            }
+
+            if (local) {
+                const storage = localBranchStorage(repo, local, tree, signal);
+                return publishLocalBranch({ storage, observation: payload, recordIntent, fenceWrite, queue, lease, signal, phase });
             }
 
             const proofKey = await resolveRepairSecret(resolveSecret, gitlab.proof_key_ref);
@@ -158,7 +190,7 @@ export function createRepairHandler({ configPath }, {
             const apiToken = await resolveRepairSecret(resolveSecret, gitlab.api_token_ref);
             const gitLab = createGitLab({ config: gitlab, token: apiToken, fetchImpl, signal });
             await gitLab.verifyProject(repo.remote);
-            let observation = await gitLab.find(mrOperation, payload);
+            let observation = await gitLab.find(deliveryOperation, payload);
             if (observation) {
                 // A confirmed MR can survive deletion of its source branch after merge.
                 const intent = await recordIntent(PUSH);
@@ -178,12 +210,12 @@ export function createRepairHandler({ configPath }, {
             await phase('record_mr', { head_sha: commit });
             await fenceWrite();
             const link = {
-                input_revision: authorization.input_revision, operation_id: mrOperation,
+                input_revision: authorization.input_revision, operation_id: deliveryOperation,
                 proposal_revision: authorization.proposal_revision, proposal_digest: authorization.proposal_digest,
-                observation, proof: signObservation(proofKey, work, authorization, mrOperation, observation),
+                observation, proof: signObservation(proofKey, work, authorization, deliveryOperation, observation),
             };
             const result = await queue.mrLinks(lease, link, signal);
-            requireScope(result?.receipt?.operation_id === mrOperation && result.receipt.work_id === work.work_id &&
+            requireScope(result?.receipt?.operation_id === deliveryOperation && result.receipt.work_id === work.work_id &&
                 result.receipt.mr_id === observation.mr_id && result.receipt.mr_iid === observation.mr_iid &&
                 result.receipt.web_url === observation.web_url, 'repair_mr_receipt_mismatch');
             return result;

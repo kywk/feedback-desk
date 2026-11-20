@@ -192,6 +192,7 @@ function workflowQueue(queue, claim, lease, scope, options, ensureHandler) {
         receipt: (work, id, result) => call('receipt', work, [id, result]),
         decisions: (work, body) => call('decisions', work, [body], true),
         mrLinks: (work, body) => call('mrLinks', work, [body], true),
+        localBranches: (work, body) => call('localBranches', work, [body], true),
     }) };
 }
 

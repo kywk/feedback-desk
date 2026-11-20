@@ -168,6 +168,17 @@ export function createQueueClient(options) {
             if (result?.receipt?.operation_id !== body.operation_id) throw new QueueError('invalid_queue_response');
             return result;
         },
+        async localBranches(lease, body, signal) {
+            const result = await request('/local-branches', { ...body, ...lease }, signal);
+            const receipt = result?.receipt;
+            if (receipt?.operation_id !== body.operation_id || receipt.work_id !== lease.work_id ||
+                receipt.input_revision !== body.observation.input_revision || receipt.stage !== 'waiting_review' ||
+                receipt.next_action !== null || receipt.outcome !== 'local_branch_ready' ||
+                !['repo_id', 'source_branch', 'target_branch', 'head_sha'].every(key => receipt[key] === body.observation[key])) {
+                throw new QueueError('invalid_queue_response');
+            }
+            return result;
+        },
         async progress(lease, stage, progress, retryAt, signal) {
             const result = await request('/progress', {
                 ...lease, stage, progress, ...(retryAt === undefined ? {} : { retry_at: retryAt }),

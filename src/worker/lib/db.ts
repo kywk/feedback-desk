@@ -60,6 +60,16 @@ export async function attachmentsForReport(db: D1Database, reportId: number): Pr
     return results;
 }
 
+export type MessageTarget = number | { justInsertedForReport: number };
+
+/** A report-scoped message inserted earlier in the same D1 batch. */
+export function messageTarget(target: MessageTarget | null | undefined): { sql: string; value: number | null } {
+    if (typeof target === 'object' && target !== null) {
+        return { sql: '(SELECT MAX(id) FROM messages WHERE report_id = ?)', value: target.justInsertedForReport };
+    }
+    return { sql: '?', value: target ?? null };
+}
+
 /**
  * Messages with the author's current account name. Public reports keep the stored name, so a
  * team member's own name is never shown to the stranger who wrote the report.

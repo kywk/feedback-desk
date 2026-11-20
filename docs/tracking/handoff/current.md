@@ -6,6 +6,6 @@ W2-01～04 已整合至本機 `main`。QA 在產品版本 `94dc54b` 完成型別
 
 依最新指示，Worker 已先完成本機 Git 隔離交付。產品提交 `243e6b3` 支援依專案設定本機或 GitLab 模式。TodoMVC 的真實修復分支 `feedback/3590696a9d6ea43ab101619f0aa61817` 已保留於本機隔離裸庫，Underscore 1.13.7 已通過基底檢查。可直接使用這兩個專案試跑。[設定與重跑方式](../../../scripts/agents/fixtures/README.md) · [本機驗收與提交紀錄](../devlog/w2-local-projects.md)
 
-**遠端路徑仍待 W2-04 真實 GitLab MR 驗收。** 已通過模型及 GitLab API 替身的契約回歸。待有指定的 GitLab 測試專案、基底分支與受限憑證參照，即可驗證真實 MR 的建立、查回與重送。依現行 Wave 計畫，W3 在該項驗收後啟動。
+**W2-04 已在本機隔離 GitLab 建立真實 MR。** 產品提交 `de632ed` 使用 GitLab CE 19.6.1 的私有專案 `root/w2-todomvc`（ID 1），以本機 TodoMVC 的 main 為基底。開發驗收查回 [MR !1](https://localhost:18443/root/w2-todomvc/-/merge_requests/1)，並核對相同工單重送仍對應同一張 MR。[設定、重跑方式與證據](../devlog/w2.md#本機-gitlab-ce-實機驗收)
 
-2026-11-20 接手複核已確認兩個本機測資與 TodoMVC 保留分支。現有設定仍無法指定獲授權的 GitLab 專案、基底與憑證參照。下一批維持 W2-04，取得對應 Worker scope 與 DMZ 登錄後，由正式 consumer 修復並核對 GitLab API 回傳的 MR 及重送結果。W3 尚未啟動。[本次盤點與缺項](../devlog/w2.md#2026-11-20-接手複核)
+W3 第一批已啟動兩端介面盤點。下一步固定巡檢來源與機器身分、終態證據、環境與收據契約，再依 Wave 計畫分工實作。[W3 第一批](../devlog/w3.md)

@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
-# PM Agent 輪詢器：定期喚起 OpenCode 的 PM agent（.opencode/agents/pm.md）
-# 透過 feedback-desk MCP 收單並處理。流程已寫在 agent 定義與 system prompt，
-# 這裡只負責「喚起 agent」，不再內嵌整段流程 prompt。
+# 同一專案以隊列作為預設。只有尚未啟用隊列的既有部署才明確指定 legacy。
 set -euo pipefail
-
-# opencode 在 non-login shell 下可能不在 PATH，補上 Homebrew 安裝位置。
 export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+case "${FEEDBACK_DESK_POLL_MODE:-queue}" in
+  queue)
+    exec "${NODE_BIN:-node}" "$SCRIPT_DIR/consumer/cli.mjs" "$@"
+    ;;
+  legacy)
+    if [[ "$#" -ne 0 || -n "${FEEDBACK_DESK_AUTOMATION_TOKEN:-}" || -n "${FEEDBACK_DESK_CONSUMER_STATE:-}" ]]; then
+      echo "[PM Agent] legacy 模式不能與隊列設定或參數同時使用。" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "[PM Agent] FEEDBACK_DESK_POLL_MODE 只接受 queue 或 legacy。" >&2
+    exit 1
+    ;;
+esac
+
 OPENCODE="${OPENCODE:-$(command -v opencode || echo /opt/homebrew/bin/opencode)}"
 
 # token 是祕密：只從環境變數讀，不寫死在腳本。沒設就警告並退出。

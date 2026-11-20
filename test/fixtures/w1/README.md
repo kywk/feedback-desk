@@ -60,3 +60,18 @@ node --test test/w1/scope-acceptance.mjs
 ```
 
 開發期間可用 `W1_SCOPE_MODULE` 指向另一個 worktree 的絕對路徑測試；記錄當時版本，未提交程式碼的結果不能當作整合驗收。完整 W1 驗收仍須真實 worker、重啟、限流及人工接手證據。
+
+## 真實子程序與隔離 HTTP／D1 驗收
+
+整合 W1-03 後，在目標 checkout 執行：
+
+```sh
+npm run build
+node --test test/w1/runtime-fixture.test.mjs test/w1/runtime-acceptance.test.mjs
+```
+
+測試啟動本機 Miniflare 與隔離 D1，套用全部 migration，透過客戶 HTTP 表單開單；實際以獨立 Node 子程序執行 W1-03 CLI。故障代理僅監聽 loopback，在送達前回 429／切斷連線，或讓上游完成寫入後丟棄 ACK。輸出的診斷包含測試工單與工作 ID、代次、階段與毫秒時間，不輸出憑證與客戶內容；請保存結果及 commit。handler 是固定測試替身，不呼叫模型或外部 ELK。scope 隔離與客戶 HTML／JSON 另由前述兩組測試驗證。
+
+重啟案例的快速模式會在 kill 子程序後把隔離 D1 租約時間設為過期；以第二個實際子程序確認同一 work、代次遞增、checkpoint 與執行次數。最終 QA 必須以 `W1_REAL_LEASE=1 node --test test/w1/runtime-acceptance.test.mjs` 額外執行自然到期模式：約等待 60 秒，核對租約原值不變後再接手。人工接手使用正式團隊 HTTP API 並觀察舊 Worker 續租 409。這些檢查不代表真實部署及外部模型、Git、ELK 已整合。
+
+開發期間可用 `W1_CONSUMER_ENTRY` 指向另一個 worktree 的絕對 CLI 路徑；需清楚記錄版本，只有在最終整合 commit 上重跑才能列為該版本的結果。

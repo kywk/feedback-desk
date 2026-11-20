@@ -43,3 +43,20 @@ W1_FAULT=disconnect W1_FAILURES=1 node test/fixtures/w1/fault-proxy.mjs
 ```
 
 代理記錄每次到達的 UTC 時間與結果，不記錄請求路徑、token 或內容。比對 worker 的持久化退避資料和代理時間；此代理只在請求進入上游前故障，提交後 ACK 遺失由前述重放及持久紀錄檢查涵蓋。代理會轉送授權標頭到指定上游，只能對隔離測試環境使用。測試完關閉代理。
+
+## 可重建的 Miniflare 與 scope 測試
+
+以下手動啟動，不納入未整合產品分支的 `npm test`。Miniflare 使用既有 migration setup 和 `test/worker/helpers.ts`，自動建立兩個專案、scope、hash token，再由客戶 HTTP 表單建立單與補件。測試核對游標重讀、同版工作數、兩個同時領件、補件後新工作與舊租約 409、跨專案 403 和客戶 HTML／JSON。它需要 W1-01 migration、入口及 API 已合併：
+
+```sh
+npx vitest run --config vitest.w1.config.ts test/w1/bootstrap.worker.ts
+npx vitest run --config vitest.w1.config.ts test/w1/queue-acceptance.worker.ts
+```
+
+Scope 測試建立兩個臨時 Git repository 和各自固定的 commit，呼叫實際 W1-02 scope 工具驗證 A 能讀自己的版本、不能讀 B repo／索引、不能穿過符號連結或使用異動的 remote，並核對稽核紀錄。ELK 請求使用替身，不代表真實 ELK 整合通過；測試會自動刪除臨時資料。W1-02 合併後執行：
+
+```sh
+node --test test/w1/scope-acceptance.mjs
+```
+
+開發期間可用 `W1_SCOPE_MODULE` 指向另一個 worktree 的絕對路徑測試；記錄當時版本，未提交程式碼的結果不能當作整合驗收。完整 W1 驗收仍須真實 worker、重啟、限流及人工接手證據。

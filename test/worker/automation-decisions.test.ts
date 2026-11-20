@@ -1,3 +1,4 @@
+import { applyD1Migrations } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import { ANALYSIS_EXAMPLE, ASSESSMENT_FACTORS, type Analysis } from '../../src/shared/automation-analysis.mjs';
@@ -12,24 +13,27 @@ const proofKey = 'fixture-gitlab-secret-independent-of-bearer';
 const evidence = 'ev:' + 'b'.repeat(64);
 const gitlab = 'https://gitlab.fixture.test';
 
-async function fixture(autoReply = false) {
+async function fixture(autoReply = false, deliveryMode: 'gitlab' | 'local' = 'gitlab') {
     const seeded = await seedProject();
     const project = seeded.project;
     const token = `fda_${randomString(48)}`;
     const reviewer = await seedDeveloper();
     const teamToken = await seedToken(reviewer.developer);
     const client = await new Browser().asClient(seeded);
+    const local = deliveryMode === 'local';
     await env.DB.batch([
         env.DB.prepare("INSERT INTO automation_scopes (project_id,environment,scope_revision,customer_ingress) VALUES (?, 'qa', ?, 1)").bind(project.id, scopeRevision),
         env.DB.prepare("INSERT INTO automation_tokens (project_id,environment,token_hash) VALUES (?, 'qa', ?)").bind(project.id, await sha256Hex(token)),
         env.DB.prepare(`INSERT INTO automation_policies (project_id,environment,scope_revision,auto_reply,gitlab_instance_id,gitlab_origin,gitlab_proof_key_ref)
-            VALUES (?, 'qa', ?, ?, 'gitlab-fixture', ?, ?)`).bind(project.id, scopeRevision, Number(autoReply), gitlab, proofKeyName),
-        env.DB.prepare(`INSERT INTO automation_repositories (project_id,environment,scope_revision,repo_id,gitlab_project_id,base_branch,base_commit,branch_prefix,required_check_ids)
-            VALUES (?, 'qa', ?, 'fixture-repo', 23, 'main', ?, 'feedback/', '["unit"]')`).bind(project.id, scopeRevision, 'a'.repeat(40)),
+            VALUES (?, 'qa', ?, ?, ?, ?, ?)`).bind(project.id, scopeRevision, Number(autoReply),
+            local ? null : 'gitlab-fixture', local ? null : gitlab, local ? null : proofKeyName),
+        env.DB.prepare(`INSERT INTO automation_repositories (project_id,environment,scope_revision,repo_id,gitlab_project_id,base_branch,base_commit,branch_prefix,required_check_ids,delivery_mode)
+            VALUES (?, 'qa', ?, 'fixture-repo', ?, 'main', ?, 'feedback/', '["unit"]', ?)`)
+            .bind(project.id, scopeRevision, local ? null : 23, 'a'.repeat(40), deliveryMode),
         env.DB.prepare("INSERT INTO automation_reviewers (project_id,environment,developer_id) VALUES (?, 'qa', ?)").bind(project.id, reviewer.developer.id),
     ]);
     const { report } = await seedReport(project);
-    const browser = new Browser(undefined, { [proofKeyName]: proofKey });
+    const browser = new Browser(undefined, local ? {} : { [proofKeyName]: proofKey });
     const workerPath = `/api/automation/${project.slug}/qa`;
     const ownPath = `/p/${project.slug}/reports/${report.public_id}`;
     return {
@@ -185,6 +189,11 @@ describe('W2 automation decisions and repairs', () => {
             repo_id: 'fixture-repo', base_commit: 'a'.repeat(40), gitlab_instance_id: 'gitlab-fixture', project_id: 23,
             source_branch: 'feedback/fixture', target_branch: 'main', head_sha: 'b'.repeat(40), check_results: [{ check_id: 'unit', status: 'passed' }],
         };
+        expect(await ok(await f.call('input', lease))).toMatchObject({ repair_authorization: { delivery_mode: 'gitlab' } });
+        const { gitlab_instance_id: _gitlab, project_id: _project, ...localPayload } = payload;
+        expect((await f.call('operations/intent', {
+            ...lease, operation_id: 'local-wrong-mode', correlation_id: 'w2-tests', operation_type: 'git.local_branch', payload: localPayload,
+        })).status).toBe(409);
         const push = { ...lease, operation_id: 'push-42', correlation_id: 'w2-tests', operation_type: 'git.push_branch', payload };
         const mr = { ...push, operation_id: 'mr-42', operation_type: 'gitlab.create_merge_request' };
         expect((await f.call('operations/intent', mr)).status).toBe(409);
@@ -210,5 +219,115 @@ describe('W2 automation decisions and repairs', () => {
         expect(await ok(await api('GET', f.teamPath, f.teamToken))).toMatchObject({ mr: { mr_iid: 4 }, work: { stage: 'waiting_mr_review' } });
         expect((await (await f.client.get(f.ownPath)).text())).not.toContain(observation.web_url);
         expect(await env.DB.prepare('SELECT status FROM reports WHERE id=?').bind(f.report.id).first('status')).toBe('new');
+    });
+});
+
+
+async function localRepair(f: Fixture) {
+    const initial = await claim(f);
+    const { receipt } = await ok<{ receipt: { proposal_revision: number; proposal_digest: string } }>(await f.call('decisions', envelope(initial)));
+    const lease = await claim(f);
+    const observation = {
+        proposal_revision: receipt.proposal_revision, proposal_digest: receipt.proposal_digest, input_revision: 1,
+        repo_id: 'fixture-repo', base_commit: 'a'.repeat(40),
+        source_branch: 'feedback/fixture-local', target_branch: 'main', head_sha: 'b'.repeat(40),
+        check_results: [{ check_id: 'unit', status: 'passed' }],
+    };
+    const operationId = 'local-branch-42';
+    return {
+        lease,
+        observation,
+        intent: { ...lease, operation_id: operationId, correlation_id: 'loc-tests', operation_type: 'git.local_branch', payload: observation },
+        body: { ...lease, operation_id: operationId, observation },
+    };
+}
+
+describe('local delivery mode', () => {
+    it('upgrades existing GitLab configuration and permits a local repo with a null project ID', async () => {
+        const db = env.UPGRADE_DB;
+        await applyD1Migrations(db, env.TEST_MIGRATIONS.filter(({ name }) => name < '0018'));
+        const at = '2026-10-01T00:00:00.000Z';
+        await db.batch([
+            db.prepare("INSERT INTO projects (id,name,slug,owner_token_hash,created_at,updated_at) VALUES (17,'Legacy','loc-upgrade','test',?,?)").bind(at, at),
+            db.prepare("INSERT INTO automation_scopes (project_id,environment,scope_revision) VALUES (17,'qa','v1')"),
+            db.prepare(`INSERT INTO automation_policies
+                (project_id,environment,scope_revision,gitlab_instance_id,gitlab_origin,gitlab_proof_key_ref)
+                VALUES (17,'qa','v1','legacy','https://gitlab.example.test','FEEDBACK_AUTOMATION_LEGACY_PROOF_KEY')`),
+            db.prepare(`INSERT INTO automation_repositories
+                (project_id,environment,scope_revision,repo_id,gitlab_project_id,base_branch,base_commit,branch_prefix,required_check_ids)
+                VALUES (17,'qa','v1','legacy-repo',23,'release',?,'feedback/','["unit","lint"]')`).bind('a'.repeat(40)),
+        ]);
+
+        await applyD1Migrations(db, env.TEST_MIGRATIONS);
+        expect(await db.prepare("SELECT * FROM automation_repositories WHERE repo_id='legacy-repo'").first()).toEqual({
+            project_id: 17, environment: 'qa', scope_revision: 'v1', repo_id: 'legacy-repo', gitlab_project_id: 23,
+            base_branch: 'release', base_commit: 'a'.repeat(40), branch_prefix: 'feedback/',
+            required_check_ids: '["unit","lint"]', delivery_mode: 'gitlab',
+        });
+        expect(await db.prepare("SELECT gitlab_proof_key_ref FROM automation_policies WHERE project_id=17").first('gitlab_proof_key_ref'))
+            .toBe('FEEDBACK_AUTOMATION_LEGACY_PROOF_KEY');
+        await db.prepare(`INSERT INTO automation_repositories
+            (project_id,environment,scope_revision,repo_id,base_branch,base_commit,branch_prefix,required_check_ids,delivery_mode)
+            VALUES (17,'qa','v1','local-repo','main',?,'feedback/','["unit"]','local')`).bind('b'.repeat(40)).run();
+        expect(await db.prepare("SELECT gitlab_project_id, delivery_mode FROM automation_repositories WHERE repo_id='local-repo'").first())
+            .toEqual({ gitlab_project_id: null, delivery_mode: 'local' });
+    });
+
+    it('records exactly one local branch receipt without changing the report or creating an MR', async () => {
+        const f = await fixture(false, 'local');
+        const { lease, body, intent, observation } = await localRepair(f);
+        expect(await ok(await f.call('input', lease))).toMatchObject({ repair_authorization: { delivery_mode: 'local' } });
+        expect((await f.call('local-branches', body)).status).toBe(409);
+        for (const operationType of ['git.push_branch', 'gitlab.create_merge_request']) {
+            expect((await f.call('operations/intent', {
+                ...intent, operation_type: operationType, payload: { ...observation, gitlab_instance_id: 'fixture', project_id: 23 },
+            })).status).toBe(409);
+        }
+        expect((await f.call('operations/intent', { ...intent, payload: { ...observation, source_branch: 'outside/prefix' } })).status).toBe(409);
+        expect((await f.call('operations/intent', { ...intent, payload: { ...observation, proposal_digest: 'd'.repeat(64) } })).status).toBe(409);
+        expect((await f.call('operations/intent', { ...intent, payload: { ...observation, check_results: [{ check_id: 'lint', status: 'passed' }] } })).status).toBe(409);
+        await ok(await f.call('operations/intent', intent));
+        expect((await f.call('operations/receipt', { ...lease, operation_id: body.operation_id, result: observation })).status).toBe(409);
+        expect((await f.call('local-branches', { ...body, observation: { ...observation, head_sha: 'c'.repeat(40) } })).status).toBe(409);
+        const [first, second] = await Promise.all([
+            f.call('local-branches', body).then(ok), f.call('local-branches', body).then(ok),
+        ]);
+        expect(first).toEqual(second);
+        expect(first).toEqual({ receipt: {
+            operation_id: body.operation_id, work_id: lease.work_id, input_revision: 1, applied_report_revision: lease.report_revision,
+            stage: 'waiting_review', next_action: null, outcome: 'local_branch_ready', repo_id: observation.repo_id,
+            source_branch: observation.source_branch, target_branch: observation.target_branch, head_sha: observation.head_sha,
+        } });
+        expect(await ok(await f.call('local-branches', body))).toEqual(first);
+        expect((await f.call('local-branches', { ...body, observation: { ...observation, head_sha: 'd'.repeat(40) } })).status).toBe(409);
+        expect(await ok(await f.call('claim', { worker_id: 'operator', scope_revision: scopeRevision }))).toEqual({ work: null });
+        expect(await ok(await api('GET', f.teamPath, f.teamToken))).toMatchObject({
+            work: { stage: 'waiting_review', next_action: null, outcome: 'local_branch_ready' }, mr: null,
+            local_branch: { ...observation, operation_id: body.operation_id, recorded_at: expect.any(String) },
+        });
+        expect((await (await f.client.get(f.ownPath)).text())).not.toContain(observation.source_branch);
+        expect(await env.DB.prepare('SELECT status FROM reports WHERE id=?').bind(f.report.id).first('status')).toBe('new');
+        expect(await env.DB.prepare('SELECT COUNT(*) n FROM messages WHERE report_id=?').bind(f.report.id).first('n')).toBe(0);
+        expect(await env.DB.prepare('SELECT COUNT(*) n FROM automation_local_branches WHERE work_id=?').bind(lease.work_id).first('n')).toBe(1);
+        expect(await env.DB.prepare('SELECT COUNT(*) n FROM automation_mr_links WHERE work_id=?').bind(lease.work_id).first('n')).toBe(0);
+    });
+
+    it('rejects a local receipt when the approved delivery mode changes before it is recorded', async () => {
+        const f = await fixture(false, 'local');
+        const { body, intent, lease } = await localRepair(f);
+        await ok(await f.call('operations/intent', intent));
+        await env.DB.prepare("UPDATE automation_repositories SET delivery_mode='gitlab', gitlab_project_id=23 WHERE project_id=?").bind(f.project.id).run();
+        expect((await f.call('input', lease)).status).toBe(409);
+        expect((await f.call('local-branches', body)).status).toBe(409);
+        expect(await env.DB.prepare('SELECT COUNT(*) n FROM automation_local_branches WHERE work_id=?').bind(body.work_id).first('n')).toBe(0);
+    });
+
+    it('rejects an unrecorded local branch result after the customer changes the input', async () => {
+        const f = await fixture(false, 'local');
+        const { body, intent } = await localRepair(f);
+        await ok(await f.call('operations/intent', intent));
+        expect((await f.client.post(`${f.ownPath}/messages`, { body: '補上重現步驟' })).status).toBe(302);
+        expect((await f.call('local-branches', body)).status).toBe(409);
+        expect(await env.DB.prepare('SELECT COUNT(*) n FROM automation_local_branches WHERE work_id=?').bind(body.work_id).first('n')).toBe(0);
     });
 });

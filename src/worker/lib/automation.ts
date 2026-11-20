@@ -262,7 +262,7 @@ function receiptView(row: OperationRow, reportPublicId: string) {
 export async function recordAutomationIntent(
     db: D1Database, scope: AutomationScope, lease: Lease,
     operation: { operation_id: string; correlation_id: string; operation_type: string; payload: Data },
-    additionalGuard?: { sql: string; values: (string | number)[] },
+    additionalGuard?: { sql: string; values: (string | number | null)[] },
 ) {
     const bindings = leaseBindings(scope, lease);
     const hash = await sha256Hex(canonicalJson(operation.payload));
@@ -303,7 +303,7 @@ export async function recordAutomationReceipt(db: D1Database, scope: AutomationS
             recorded_at = COALESCE(recorded_at, ${SQL_NOW}), recorded_by = COALESCE(recorded_by, ?9),
             recorded_generation = COALESCE(recorded_generation, ?8)
          WHERE project_id = ?1 AND environment = ?2 AND operation_id = ?10 AND work_id = ?5 AND report_revision = ?7
-             AND operation_type <> 'gitlab.create_merge_request'
+             AND operation_type NOT IN ('gitlab.create_merge_request', 'git.local_branch')
              AND (result_hash IS NULL OR result_hash = ?12)
              AND EXISTS (SELECT 1 FROM automation_work w WHERE ${ACTIVE_LEASE})
          RETURNING *`,

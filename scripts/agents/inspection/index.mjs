@@ -4,6 +4,7 @@ import { createClient, InspectionError } from './client.mjs';
 import { createInspectionStore, digest } from './state.mjs';
 
 const PAGE_LIMIT = 100;
+const LINK_LIMIT = 50;
 const PATH_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,115}$/;
 const ENV_REF = /^[A-Z][A-Z0-9_]{0,127}$/;
 const SIGNATURE = /^[a-f0-9]{64}$/;
@@ -135,7 +136,7 @@ function verifyLink(actual, expected, reason) {
 }
 
 export async function runInspectionBridge({ config, stateDirectory, environment = process.env, fetchImpl = globalThis.fetch,
-    signal = new AbortController().signal, log = () => {}, once = false, replay, pollMs = 3000, maxAttempts = 3,
+    signal = new AbortController().signal, log = () => {}, once = false, replay, reconcile, pollMs = 3000, maxAttempts = 3,
     retryBaseMs = 1000 }) {
     const { whippetOrigin, feedbackOrigin, sources } = loadConfig(config);
     const store = await createInspectionStore(stateDirectory);
@@ -150,36 +151,51 @@ export async function runInspectionBridge({ config, stateDirectory, environment 
         };
     }
 
-    async function processRun(source, whippet, runId, listed) {
-        const path = whippet.path + '/' + runId;
-        const observed = await whippet.request(path);
+    function feedbackFor(source, whippet) {
+        const token = getToken(environment, source.feedback_desk_token_env, /^fdi_[A-Za-z0-9_-]{28,124}$/);
+        if (token === whippet.token) throw new InspectionError('inspection_credential_unavailable');
+        return {
+            request: createClient({ service: 'feedback_desk', origin: feedbackOrigin, token, ...transport }),
+            path: '/api/automation/' + source.project_slug + '/' + source.environment,
+        };
+    }
+
+    async function readRun(source, whippet, runId) {
+        const observed = await whippet.request(whippet.path + '/' + runId);
         if (observed?.workspaceId !== source.workspace_id || observed?.environment !== source.whippet_environment || observed.runId !== runId) {
             throw new InspectionError('whippet_invalid_run');
         }
+        return observed;
+    }
+
+    async function acknowledgeLink(source, whippet, feedback, link) {
+        const { workspace_id, run_id, attempt_id, report_public_id } = link;
+        const body = { attemptId: attempt_id, projectSlug: source.project_slug, reportPublicId: report_public_id };
+        verifyLink(await whippet.request(whippet.path + '/' + run_id + '/links', body),
+            { workspaceId: workspace_id, runId: run_id, ...body }, 'whippet_invalid_link');
+        verifyLink((await feedback.request(feedback.path + '/inspection-links', link))?.link, link, 'feedback_desk_invalid_link');
+    }
+
+    async function processRun(source, whippet, runId, listed) {
+        const observed = await readRun(source, whippet, runId);
         const outcome = classify(observed, listed, source.checksByTest.get(observed.testId));
         const run = store.run(source.stream, runId);
         const result = { source_id: source.source_id, workspace_id: source.workspace_id, run_id: runId, outcome };
         if (matches(observed.attemptId, PATH_ID)) result.attempt_id = observed.attemptId;
 
         if (outcome === 'assertion_failed') {
-            const token = getToken(environment, source.feedback_desk_token_env, /^fdi_[A-Za-z0-9_-]{28,124}$/);
-            if (token === whippet.token) throw new InspectionError('inspection_credential_unavailable');
-            const request = createClient({ service: 'feedback_desk', origin: feedbackOrigin, token, ...transport });
-            const base = '/api/automation/' + source.project_slug + '/' + source.environment;
+            const feedback = feedbackFor(source, whippet);
             const event = eventFor(observed, source);
             await run.saveEvent(event);
-            const receipt = receiptFor((await request(base + '/inspection-events', event))?.receipt, event);
+            const receipt = receiptFor((await feedback.request(feedback.path + '/inspection-events', event))?.receipt, event);
             await run.saveReceipt(receipt);
 
             result.outcome = receipt.ignored_reason ?? receipt.outcome;
             result.event_id = receipt.event_id;
             if (receipt.outcome === 'linked') {
-                const body = { attemptId: observed.attemptId, projectSlug: source.project_slug, reportPublicId: receipt.report_public_id };
-                verifyLink(await whippet.request(path + '/links', body), { workspaceId: source.workspace_id, runId, ...body },
-                    'whippet_invalid_link');
                 const link = { workspace_id: source.workspace_id, run_id: runId,
                     attempt_id: observed.attemptId, report_public_id: receipt.report_public_id };
-                verifyLink((await request(base + '/inspection-links', link))?.link, link, 'feedback_desk_invalid_link');
+                await acknowledgeLink(source, whippet, feedback, link);
                 result.project_slug = source.project_slug;
                 result.environment = source.environment;
                 result.report_public_id = receipt.report_public_id;
@@ -188,6 +204,40 @@ export async function runInspectionBridge({ config, stateDirectory, environment 
 
         await run.saveResult(result);
         log('inspection_result', result);
+    }
+
+    async function reconcileSource(source) {
+        const whippet = whippetFor(source);
+        const feedback = feedbackFor(source, whippet);
+        const page = await feedback.request(feedback.path + '/inspection-links?limit=' + LINK_LIMIT);
+        if (!Array.isArray(page?.links) || page.links.length > LINK_LIMIT) throw new InspectionError('feedback_desk_invalid_links');
+        let firstFailure;
+        for (const pending of page.links) {
+            const { workspace_id, run_id, attempt_id, report_public_id } = pending ?? {};
+            const fields = { source_id: source.source_id, workspace_id: source.workspace_id };
+            try {
+                if (workspace_id !== source.workspace_id || !matches(run_id, PATH_ID) || !matches(attempt_id, PATH_ID) ||
+                    !matches(report_public_id, REPORT_ID)) throw new InspectionError('feedback_desk_invalid_link');
+                fields.run_id = run_id;
+                const observed = await readRun(source, whippet, run_id);
+                const outcome = classify(observed, undefined, source.checksByTest.get(observed.testId));
+                if (observed.attemptId !== attempt_id || outcome !== 'assertion_failed') {
+                    throw new InspectionError('inspection_pending_evidence_changed');
+                }
+                const link = { workspace_id, run_id, attempt_id, report_public_id };
+                await acknowledgeLink(source, whippet, feedback, link);
+                const result = { ...fields, attempt_id, report_public_id, outcome: 'linked',
+                    project_slug: source.project_slug, environment: source.environment, reconciled: true };
+                await store.run(source.stream, run_id).saveResult(result);
+                log('inspection_result', result);
+            } catch (error) {
+                if (signal.aborted || !(error instanceof InspectionError)) throw error;
+                firstFailure ??= error;
+                log('inspection_reconcile_failed', { ...fields, reason: error.message,
+                    ...(error.status === undefined ? {} : { status: error.status }) });
+            }
+        }
+        if (firstFailure) throw firstFailure;
     }
 
     async function poll(source) {
@@ -210,6 +260,13 @@ export async function runInspectionBridge({ config, stateDirectory, environment 
         const source = sources.find(item => item.source_id === replay.sourceId);
         if (!source || !matches(replay.runId, PATH_ID)) throw new InspectionError('inspection_replay_invalid');
         await processRun(source, whippetFor(source), replay.runId);
+        return;
+    }
+
+    if (reconcile) {
+        const source = sources.find(item => item.source_id === reconcile);
+        if (!source) throw new InspectionError('inspection_reconcile_invalid');
+        await reconcileSource(source);
         return;
     }
 

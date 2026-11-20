@@ -22,12 +22,13 @@ function integerEnv(name, fallback, max) {
 
 async function main(args, signal) {
     if (args.length === 1 && args[0] === '--help') {
-        process.stdout.write('Usage: node scripts/agents/inspection/cli.mjs [--once | --replay <sourceId> <runId>]\n');
+        process.stdout.write('Usage: node scripts/agents/inspection/cli.mjs [--once | --replay <sourceId> <runId> | --reconcile <sourceId>]\n');
         return;
     }
     const once = args.length === 1 && args[0] === '--once';
     const replay = args.length === 3 && args[0] === '--replay' ? { sourceId: args[1], runId: args[2] } : undefined;
-    if (args.length && !once && !replay) throw new InspectionError('invalid_arguments');
+    const reconcile = args.length === 2 && args[0] === '--reconcile' ? args[1] : undefined;
+    if (args.length && !once && !replay && !reconcile) throw new InspectionError('invalid_arguments');
     const configPath = required('FEEDBACK_DESK_INSPECTION_CONFIG');
     const stateDirectory = required('FEEDBACK_DESK_INSPECTION_STATE_DIR');
     let config;
@@ -36,7 +37,7 @@ async function main(args, signal) {
     } catch {
         throw new InspectionError('inspection_config_invalid');
     }
-    await runInspectionBridge({ config, stateDirectory, signal, log, once, replay,
+    await runInspectionBridge({ config, stateDirectory, signal, log, once, replay, reconcile,
         pollMs: integerEnv('FEEDBACK_DESK_INSPECTION_POLL_MS', 3000, 3_600_000),
         maxAttempts: integerEnv('FEEDBACK_DESK_INSPECTION_MAX_ATTEMPTS', 3, 10) });
 }

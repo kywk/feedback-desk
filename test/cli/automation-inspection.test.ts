@@ -34,7 +34,7 @@ function fixture(runs: ReturnType<typeof terminal>[]) {
     const controls = { loseAck: '', staleRun: '', detail: new Map<string, ReturnType<typeof terminal>>() };
     const calls = {
         events: [] as any[], list: [] as { environment: string; after: string | null }[],
-        details: [] as string[], dmzLinks: [] as any[], whippetLinks: [] as any[],
+        details: [] as string[], dmzLinks: [] as any[], whippetLinks: [] as any[], pending: [] as string[],
     };
     const events = new Map<string, { event: any; receipt: any }>();
     const links = new Map<string, any>();
@@ -83,6 +83,14 @@ function fixture(runs: ReturnType<typeof terminal>[]) {
         const scope = match![1] === 'feedback-qa' ? 'qa' : 'stage';
         expect(token).toBe('Bearer ' + (scope === 'qa' ? environment.FEEDBACK_QA : environment.FEEDBACK_STAGE));
         if (match![2] === 'links') {
+            if (init.method === 'GET') {
+                calls.pending.push(scope);
+                expect(url.searchParams.get('limit')).toBe('50');
+                return Response.json({ links: [...events.values()].filter(({ event, receipt }) =>
+                    event.scope.environment === match![1] && receipt.outcome === 'linked' && !acknowledgments.has(receipt.run_id))
+                    .map(({ receipt: { workspace_id, run_id, attempt_id, report_public_id } }) =>
+                        ({ workspace_id, run_id, attempt_id, report_public_id })) });
+            }
             expect(links.get(body.run_id)?.reportPublicId).toBe(body.report_public_id);
             calls.dmzLinks.push(body);
             acknowledgments.set(body.run_id, body);
@@ -90,7 +98,7 @@ function fixture(runs: ReturnType<typeof terminal>[]) {
         }
         calls.events.push(body);
         const previous = events.get(body.event_id);
-        if (previous) expect(body).toEqual(previous.event);
+        if (previous) expect(body).toEqual({ ...previous.event, scope_revision: body.scope_revision });
         const { workspace_id, run_id, attempt_id } = body.payload;
         const stale = controls.staleRun === run_id;
         const receipt = previous?.receipt ?? { event_id: body.event_id, operation_id: body.operation_id, workspace_id, run_id,
@@ -194,6 +202,52 @@ describe('Whippet inspection bridge', () => {
         expect(await readdir(stateDirectory)).toEqual([]);
         await expect(bridge(service, { config: { ...config, sources: [qa, { ...stage, whippet_environment: 'qa' }] } }))
             .rejects.toThrow('inspection_config_invalid');
+    });
+
+    it('repairs a DMZ pending link after state loss and scope revision changes without using the feed or recreating the event', async () => {
+        const service = fixture([terminal('recover-1')]);
+        service.controls.loseAck = 'dmz-event';
+        await expect(bridge(service)).rejects.toThrow('feedback_desk_unavailable');
+        await rm(stateDirectory, { recursive: true });
+        const revised = { ...config, sources: [{ ...qa, scope_revision: 'v2' }, stage] };
+        const log = vi.fn();
+        await bridge(service, { reconcile: qa.source_id, config: revised, log });
+        await bridge(service, { reconcile: qa.source_id, config: revised, log });
+        expect(service.calls.events).toHaveLength(1);
+        expect(service.calls.list).toHaveLength(2);
+        expect(service.calls.pending).toEqual(['qa', 'qa']);
+        expect(service.calls.details).toEqual(['recover-1', 'recover-1']);
+        expect(service.calls.dmzLinks).toHaveLength(1);
+        expect(log).toHaveBeenCalledExactlyOnceWith('inspection_result', expect.objectContaining({
+            run_id: 'recover-1', report_public_id: reports.qa, outcome: 'linked', reconciled: true,
+        }));
+        expect((await readdir(stateDirectory)).every(file => file.endsWith('.result.json'))).toBe(true);
+    });
+
+    it('leaves a pending link untouched when the current Whippet attempt differs from its receipt', async () => {
+        const service = fixture([terminal('changed-1')]);
+        service.controls.loseAck = 'dmz-event';
+        await expect(bridge(service)).rejects.toThrow('feedback_desk_unavailable');
+        service.controls.detail.set('changed-1', terminal('changed-1', { attemptId: 'a-different-attempt' }));
+        const log = vi.fn();
+        await expect(bridge(service, { reconcile: qa.source_id, log })).rejects.toThrow('inspection_pending_evidence_changed');
+        expect(service.calls.whippetLinks).toHaveLength(0);
+        expect(service.calls.dmzLinks).toHaveLength(0);
+        expect(log).toHaveBeenCalledExactlyOnceWith('inspection_reconcile_failed', expect.objectContaining({
+            run_id: 'changed-1', reason: 'inspection_pending_evidence_changed',
+        }));
+    });
+
+    it('continues polling the interrupted page using the current authorization revision and the original observation', async () => {
+        const service = fixture([terminal('revised-1')]);
+        service.controls.loseAck = 'dmz-event';
+        await expect(bridge(service)).rejects.toThrow('feedback_desk_unavailable');
+        await bridge(service, { config: { ...config, sources: [{ ...qa, scope_revision: 'v2' }, stage] } });
+        expect(service.calls.events).toHaveLength(2);
+        const [original, retried] = service.calls.events;
+        expect(retried).toEqual({ ...original, scope_revision: 'v2' });
+        expect(service.events.size).toBe(1);
+        expect(service.acknowledgments.size).toBe(1);
     });
 
     it('exposes the command-line entry point without requiring credentials for help', () => {

@@ -168,12 +168,15 @@ export async function deleteReport(env: Env, report: Report): Promise<void> {
 }
 
 /** Status change shared by the web pages, the API and MCP; completion time and activity time follow the same rule. */
+export function changeStatusStatements(db: D1Database, report: Report, status: ReportStatus, at: string, author?: Author) {
+    return [
+        db.prepare('UPDATE reports SET status = ?, completed_at = ?, latest_activity_at = ?, updated_at = ? WHERE id = ?').bind(status, status === 'completed' ? at : null, at, at, report.id),
+        ...(author && report.status !== status ? [eventStatement(db, report, 'status', author, at, `${report.status}>${status}`)] : []),
+    ];
+}
+
 export async function changeStatus(env: Env, report: Report, status: ReportStatus, now = Date.now(), author?: Author): Promise<void> {
-    const at = nowIso(now);
-    await env.DB.batch([
-        env.DB.prepare('UPDATE reports SET status = ?, completed_at = ?, latest_activity_at = ?, updated_at = ? WHERE id = ?').bind(status, status === 'completed' ? at : null, at, at, report.id),
-        ...(author && report.status !== status ? [eventStatement(env.DB, report, 'status', author, at, `${report.status}>${status}`)] : []),
-    ]);
+    await env.DB.batch(changeStatusStatements(env.DB, report, status, nowIso(now), author));
 }
 
 export async function setClientDeleted(env: Env, report: Report, deleted: boolean, now = Date.now()): Promise<void> {

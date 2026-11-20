@@ -2,7 +2,9 @@ import { Hono, type MiddlewareHandler } from 'hono';
 import { z } from 'zod';
 import { AutomationError } from '../lib/automation';
 import { automationReviewState, automationTeamScope, reviewAutomationDecision } from '../lib/automation-decisions';
+import { deploymentRecord } from '../lib/automation-deployments';
 import { inspectionDetail } from '../lib/automation-inspections';
+import { retestHistory, retestRunReports } from '../lib/automation-retests';
 import { identifier, readInput, revision } from './automation';
 import { nowIso } from '../../shared/time';
 import { randomString, sha256Hex } from '../lib/crypto';
@@ -338,12 +340,35 @@ async function teamAutomationContext(c: AppContext) {
     return { scope, developer };
 }
 
+api.get('/projects/:slug/automation/:environment/deployments/:deployment_id', async (c) => {
+    const { scope } = await teamAutomationContext(c);
+    const id = identifier.safeParse(c.req.param('deployment_id'));
+    if (!id.success) throw new team.ServiceError('invalid_request', '部署識別格式不符。', 400);
+    const deployment = await deploymentRecord(c.env.DB, scope.project_id, scope.environment, id.data);
+    if (!deployment) throw new team.ServiceError('deployment_not_found', '找不到此專案環境的部署。', 404);
+    c.header('Cache-Control', 'no-store');
+    return c.json({ deployment });
+});
+
+api.get('/projects/:slug/automation/:environment/retest-runs/:run_id', async (c) => {
+    const { scope } = await teamAutomationContext(c);
+    const run = identifier.safeParse(c.req.param('run_id'));
+    if (!run.success) throw new team.ServiceError('invalid_request', '重測執行識別格式不符。', 400);
+    const result = await retestRunReports(c.env.DB, scope.project_id, scope.environment, run.data);
+    if (!result.reports.length) throw new team.ServiceError('retest_run_not_found', '找不到此專案環境的重測執行。', 404);
+    c.header('Cache-Control', 'no-store');
+    return c.json(result);
+});
+
 api.get(teamAutomationPath, async (c) => {
     const { scope } = await teamAutomationContext(c);
     const snapshot = await automationReviewState(c.env.DB, scope, c.req.param('ref'), c.req.query('work_id'));
     if (!snapshot) throw new team.ServiceError('report_not_found', '找不到這張回饋單。', 404);
-    const inspection = await inspectionDetail(c.env.DB, scope, c.req.param('ref'));
-    return c.json(inspection ? { ...snapshot, inspection } : snapshot);
+    const [inspection, retests] = await Promise.all([
+        inspectionDetail(c.env.DB, scope, c.req.param('ref')),
+        retestHistory(c.env.DB, scope.project_id, scope.environment, c.req.param('ref')),
+    ]);
+    return c.json({ ...snapshot, ...(inspection ? { inspection } : {}), ...(retests.length ? { retests } : {}) });
 });
 
 api.post(`${teamAutomationPath}/review`, async (c) => {

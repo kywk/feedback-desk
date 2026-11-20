@@ -10,6 +10,8 @@ import {
     recordAutomationIntent, recordAutomationReceipt, renewAutomationWork, saveAutomationProgress, type AutomationScope,
 } from '../lib/automation';
 import { acceptInspectionEvent, acknowledgeInspectionLink, inspectionScope, pendingInspectionLinks } from '../lib/automation-inspections';
+import { registerDeployment, w4Scope } from '../lib/automation-deployments';
+import { bindRetestRun, getRetestIntent, listRetestIntents, recordRetestResult, RETEST_OUTCOMES } from '../lib/automation-retests';
 import type { AppEnv } from './context';
 
 export const automation = new Hono<AppEnv & { Variables: { automationScope: AutomationScope } }>();
@@ -144,6 +146,56 @@ automation.get(`${scopePath}/inspection-links`, async (c) => {
 automation.post(`${scopePath}/inspection-links`, async (c) => {
     const scope = await inspectionScope(c.env.DB, c.req.header('authorization'), c.req.param('project_slug'), c.req.param('environment'));
     return c.json(await acknowledgeInspectionLink(c.env.DB, scope, await readInput(c.req, inspectionLink)));
+});
+
+const evidenceId = identifier.refine(ref => !ref.includes('://') && !/\bfd[adir]_[A-Za-z0-9_-]{28,124}\b/.test(ref));
+const deploymentFields = {
+    scope_revision: identifier, deployment_id: identifier, component_id: identifier,
+    sequence: revision, occurred_at: z.iso.datetime(), evidence_ref: evidenceId,
+};
+const deploymentEvent = z.discriminatedUnion('state', [
+    z.strictObject({ ...deploymentFields, state: z.literal('succeeded'), artifact_revision: identifier, commit_shas: z.array(commit).max(100) }),
+    z.strictObject({ ...deploymentFields, state: z.literal('failed') }),
+]);
+const runBinding = z.strictObject({
+    scope_revision: identifier, retest_request_id: z.uuid(), deployment_id: identifier, artifact_revision: identifier,
+    workspace_id: identifier, test_id: identifier, version_id: identifier, run_id: identifier,
+});
+const retestResult = runBinding.extend({
+    operation_id: identifier, attempt_id: identifier.nullable(), attempt_generation: revision.nullable(), started_at: z.iso.datetime().nullable(), finished_at: z.iso.datetime(),
+    outcome: z.enum(RETEST_OUTCOMES),
+    checks: z.array(z.strictObject({ check_key: identifier, status: z.enum(['passed', 'failed', 'skipped']) })).max(32)
+        .refine(checks => new Set(checks.map(check => check.check_key)).size === checks.length),
+    evidence_refs: z.array(evidenceId).max(10),
+    failure_signature: evidenceId.optional(),
+});
+
+automation.post(`${scopePath}/deployments`, async (c) => {
+    const scope = await w4Scope(c.env.DB, c.req.header('authorization'), c.req.param('project_slug'), c.req.param('environment'), 'deployment');
+    return c.json(await registerDeployment(c.env.DB, scope, await readInput(c.req, deploymentEvent), c.get('now')));
+});
+automation.get(`${scopePath}/retest-intents`, async (c) => {
+    const scope = await w4Scope(c.env.DB, c.req.header('authorization'), c.req.param('project_slug'), c.req.param('environment'), 'retest');
+    const limit = c.req.query('limit') ?? '50';
+    const after = c.req.query('after') ?? '0';
+    if (!/^(?:[1-9]|[1-4][0-9]|50)$/.test(limit) || !/^\d{1,16}$/.test(after) || !Number.isSafeInteger(Number(after))) {
+        throw new AutomationError('invalid_request', 400, '重測清單的查詢範圍不符。');
+    }
+    return c.json(await listRetestIntents(c.env.DB, scope, Number(after), Number(limit)));
+});
+automation.get(`${scopePath}/retest-intents/:request_id`, async (c) => {
+    const scope = await w4Scope(c.env.DB, c.req.header('authorization'), c.req.param('project_slug'), c.req.param('environment'), 'retest');
+    const requestId = z.uuid().safeParse(c.req.param('request_id'));
+    if (!requestId.success) throw new AutomationError('invalid_request', 400, '重測識別格式不符。');
+    return c.json(await getRetestIntent(c.env.DB, scope, requestId.data));
+});
+automation.post(`${scopePath}/retest-runs`, async (c) => {
+    const scope = await w4Scope(c.env.DB, c.req.header('authorization'), c.req.param('project_slug'), c.req.param('environment'), 'retest');
+    return c.json(await bindRetestRun(c.env.DB, scope, await readInput(c.req, runBinding)));
+});
+automation.post(`${scopePath}/retest-results`, async (c) => {
+    const scope = await w4Scope(c.env.DB, c.req.header('authorization'), c.req.param('project_slug'), c.req.param('environment'), 'retest');
+    return c.json(await recordRetestResult(c.env, scope, await readInput(c.req, retestResult), c.get('now')));
 });
 
 automation.use(`${scopePath}/*`, async (c, next) => {

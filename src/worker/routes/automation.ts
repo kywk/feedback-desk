@@ -2,7 +2,9 @@ import { Hono, type HonoRequest } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { AnalysisError, parseAnalysis } from '../../shared/automation-analysis.mjs';
-import { applyAutomationDecision, automationInput, GIT_MR, GIT_PUSH, linkAutomationMr, typedGitGuard } from '../lib/automation-decisions';
+import {
+    applyAutomationDecision, automationInput, GIT_LOCAL_BRANCH, GIT_MR, GIT_PUSH, linkAutomationMr, recordLocalBranch, typedGitGuard, typedLocalBranchGuard,
+} from '../lib/automation-decisions';
 import {
     AUTOMATION_STAGES, AutomationError, automationScope, claimAutomationWork, listAutomationEvents,
     recordAutomationIntent, recordAutomationReceipt, renewAutomationWork, saveAutomationProgress, type AutomationScope,
@@ -56,19 +58,18 @@ const receipt = lease.extend({ operation_id: identifier, result: data });
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const commit = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 const branch = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/);
-const gitIntent = z.strictObject({
+const branchIntent = z.strictObject({
     proposal_revision: revision,
     proposal_digest: digest,
     input_revision: revision,
     repo_id: identifier,
     base_commit: commit,
-    gitlab_instance_id: identifier,
-    project_id: revision,
     source_branch: branch,
     target_branch: branch,
     head_sha: commit,
     check_results: z.array(z.strictObject({ check_id: identifier, status: z.literal('passed') })).min(1).max(10),
 });
+const gitIntent = branchIntent.extend({ gitlab_instance_id: identifier, project_id: revision });
 const observation = gitIntent.extend({
     mr_id: revision,
     mr_iid: revision,
@@ -81,6 +82,8 @@ const mr = lease.extend({
     input_revision: revision, operation_id: identifier, proposal_revision: revision, proposal_digest: digest,
     observation, proof: digest,
 });
+
+const localBranch = lease.extend({ operation_id: identifier, observation: branchIntent });
 
 export async function readInput<T>(request: HonoRequest, schema: z.ZodType<T>): Promise<T> {
     let body: unknown;
@@ -125,6 +128,12 @@ automation.post(`${scopePath}/operations/intent`, async (c) => {
     const input = await readInput(c.req, intent);
     const scope = c.get('automationScope');
     const db = c.env.DB;
+    if (input.operation_type === GIT_LOCAL_BRANCH) {
+        const parsed = branchIntent.safeParse(input.payload);
+        if (!parsed.success) throw new AutomationError('invalid_request', 400, '本機分支操作欄位或格式不符。');
+        const guard = await typedLocalBranchGuard(db, scope, input, parsed.data);
+        return c.json(await recordAutomationIntent(db, scope, input, { ...input, payload: parsed.data }, guard));
+    }
     if (input.operation_type === GIT_PUSH || input.operation_type === GIT_MR) {
         const typed = gitIntent.safeParse(input.payload);
         if (!typed.success) throw new AutomationError('invalid_request', 400, '外部操作欄位或格式不符。');
@@ -160,4 +169,9 @@ automation.post(`${scopePath}/decisions`, async (c) => {
 automation.post(`${scopePath}/mr-links`, async (c) => {
     const input = await readInput(c.req, mr);
     return c.json(await linkAutomationMr(c.env, c.get('automationScope'), input, input));
+});
+
+automation.post(`${scopePath}/local-branches`, async (c) => {
+    const input = await readInput(c.req, localBranch);
+    return c.json(await recordLocalBranch(c.env.DB, c.get('automationScope'), input, input));
 });

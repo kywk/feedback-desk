@@ -11,6 +11,7 @@ import { addMessageStatements, eventStatement, messageAuthorName } from './repor
 
 export const GIT_PUSH = 'git.push_branch';
 export const GIT_MR = 'gitlab.create_merge_request';
+export const GIT_LOCAL_BRANCH = 'git.local_branch';
 const SCOPE_KEY = 'project_id = ? AND environment = ? AND scope_revision = ?';
 type Scope = Pick<AutomationScope, 'project_id' | 'project_slug' | 'environment' | 'scope_revision'>;
 type SqlValue = number | string | null;
@@ -36,9 +37,12 @@ interface Policy {
     gitlab_proof_key_ref: string | null;
 }
 
+type DeliveryMode = 'gitlab' | 'local';
+
 interface Repository {
     repo_id: string;
-    gitlab_project_id: number;
+    gitlab_project_id: number | null;
+    delivery_mode: DeliveryMode;
     base_branch: string;
     base_commit: string;
     branch_prefix: string;
@@ -52,21 +56,25 @@ interface Decision {
     analysis_json: string;
     outcome: string;
     proposal_digest: string | null;
+    delivery_mode: DeliveryMode | null;
 }
 
-export interface GitIntent {
+export interface LocalBranchIntent {
     proposal_revision: number;
     proposal_digest: string;
     input_revision: number;
     repo_id: string;
     base_commit: string;
-    gitlab_instance_id: string;
-    project_id: number;
     source_branch: string;
     target_branch: string;
     head_sha: string;
     check_results: Array<{ check_id: string; status: 'passed' }>;
 }
+export interface GitIntent extends LocalBranchIntent {
+    gitlab_instance_id: string;
+    project_id: number;
+}
+
 export interface GitObservation extends GitIntent {
     mr_id: number;
     mr_iid: number;
@@ -135,7 +143,7 @@ async function repairGrant(db: D1Database, scope: Scope, work: Work) {
     const proposal = analysis.proposal;
     if (!proposal || !hasRepairBasis(analysis)) return null;
     const repo = await repositoryFor(db, scope, proposal);
-    if (!repoMatches(repo, proposal)) return null;
+    if (!repoMatches(repo, proposal) || decision.delivery_mode !== repo.delivery_mode) return null;
     const approval = decision.outcome === 'repair_authorized' ? null : await db.prepare(
         "SELECT approval_id FROM automation_reviews WHERE work_id = ? AND decision_revision = ? AND action = 'approve'",
     ).bind(work.work_id, decision.decision_revision).first<{ approval_id: string }>();
@@ -149,6 +157,7 @@ async function repairGrant(db: D1Database, scope: Scope, work: Work) {
         scope_revision: work.scope_revision,
         proposal,
         repo_id: proposal.repo_id,
+        delivery_mode: decision.delivery_mode,
         base_branch: repo.base_branch,
         base_commit: proposal.base_commit,
         required_check_ids: proposal.required_check_ids,
@@ -322,9 +331,9 @@ export async function applyAutomationDecision(env: Env, scope: AutomationScope, 
                     AND COALESCE((SELECT auto_reply FROM automation_policies WHERE project_id=?1 AND environment=?2 AND scope_revision=?3), 0) = ?12
                     ${next === 'repair' ? `AND EXISTS (SELECT 1 FROM automation_repositories a
                         WHERE a.project_id=?1 AND a.environment=?2 AND a.scope_revision=?3
-                        AND a.repo_id=?13 AND a.base_commit=?14 AND a.required_check_ids=?15)` : ''}`,
+                        AND a.repo_id=?13 AND a.base_commit=?14 AND a.required_check_ids=?15 AND a.delivery_mode=?16)` : ''}`,
                     [...leaseBindings(scope, lease), command.input_revision, work.proposal_revision, policy?.auto_reply ?? 0,
-                        ...(next === 'repair' && repo ? [repo.repo_id, repo.base_commit, repo.required_check_ids] : [])]),
+                        ...(next === 'repair' && repo ? [repo.repo_id, repo.base_commit, repo.required_check_ids, repo.delivery_mode] : [])]),
             ];
             const ids: { message?: number; draft?: number } = {};
             if (stage === 'waiting_customer' && customerBody) {
@@ -346,9 +355,9 @@ export async function applyAutomationDecision(env: Env, scope: AutomationScope, 
             const { customer_body: _customerBody, ...internal } = analysis;
             effects.push(
                 db.prepare(`INSERT INTO automation_decisions
-                    (work_id, decision_revision, report_revision, scope_revision, analysis_json, outcome, proposal_digest, created_at)
-                    VALUES (?,?,?,?,?,?,?,?)`).bind(work.work_id, revision, lease.report_revision, lease.scope_revision,
-                        JSON.stringify(internal), outcome, digest, at),
+                    (work_id, decision_revision, report_revision, scope_revision, analysis_json, outcome, proposal_digest, created_at, delivery_mode)
+                    VALUES (?,?,?,?,?,?,?,?,?)`).bind(work.work_id, revision, lease.report_revision, lease.scope_revision,
+                        JSON.stringify(internal), outcome, digest, at, repo?.delivery_mode ?? null),
                 db.prepare(`INSERT INTO handoff_notes (report_id, author_name, agent, body, created_at) VALUES (?,?,?,?,?)`)
                     .bind(report.id, actor.name, actor.agent,
                         [redactAnalysisText(analysis.summary), followUp, ...analysis.missing_requirements.map(redactAnalysisText)].filter(Boolean).join('\n').slice(0, 5000), at),
@@ -391,11 +400,13 @@ export async function automationReviewState(db: D1Database, scope: TeamScope, pu
         AND (?4 IS NULL OR w.work_id=?4) ORDER BY w.event_cursor DESC LIMIT 1`)
         .bind(scope.project_id, scope.environment, publicId, workId ?? null).first<Work>();
     if (!work) return { report_public_id: publicId, report_revision: report.report_revision, scope_revision: scope.scope_revision, work: null };
-    const [decision, reviews, mr] = await Promise.all([
+    const [decision, reviews, mr, localBranch] = await Promise.all([
         decisionFor(db, work),
         db.prepare(`SELECT approval_id, action, decision_revision, developer_name, report_revision, scope_revision, evidence_json, reason, created_at
              FROM automation_reviews WHERE work_id=? ORDER BY created_at, rowid LIMIT 50`).bind(work.work_id).all(),
         db.prepare('SELECT observation_json FROM automation_mr_links WHERE work_id=?').bind(work.work_id).first<string>('observation_json'),
+        db.prepare('SELECT operation_id, observation_json, recorded_at FROM automation_local_branches WHERE work_id=? ORDER BY decision_revision DESC LIMIT 1')
+            .bind(work.work_id).first<{ operation_id: string; observation_json: string; recorded_at: string }>(),
     ]);
     const { decision_outcome, ...workFields } = work;
     // Explicit projection keeps the worker credential hash out of human APIs.
@@ -405,7 +416,7 @@ export async function automationReviewState(db: D1Database, scope: TeamScope, pu
         scope_revision: scope.scope_revision,
         work: {
             work_id: workFields.work_id, scope_revision: workFields.scope_revision, input_revision: workFields.input_revision,
-            report_revision: workFields.report_revision, next_action: workFields.next_action,
+            report_revision: workFields.report_revision, next_action: decision_outcome === 'local_branch_ready' ? null : workFields.next_action,
             stage: decision_outcome === 'mr_opened' ? 'waiting_mr_review' : decision_outcome === 'mr_merged' ? 'waiting_deployment' : workFields.stage,
             outcome: decision_outcome,
             revoked_reason: work.revoked_reason,
@@ -413,12 +424,17 @@ export async function automationReviewState(db: D1Database, scope: TeamScope, pu
         decision: decision && {
             decision_revision: decision.decision_revision, report_revision: decision.report_revision, scope_revision: decision.scope_revision,
             proposal_revision: decision.proposal_digest ? decision.decision_revision : null, proposal_digest: decision.proposal_digest,
-            analysis: JSON.parse(decision.analysis_json) as Analysis, outcome: decision.outcome,
+            analysis: JSON.parse(decision.analysis_json) as Analysis, outcome: decision.outcome, delivery_mode: decision.delivery_mode,
         },
         reviews: reviews.results.map(({ evidence_json, ...review }) => ({
             ...review, evidence_refs: evidence_json === null ? [] : JSON.parse(String(evidence_json)) as string[],
         })),
         mr: mr ? JSON.parse(mr) as GitObservation : null,
+        local_branch: localBranch ? {
+            ...JSON.parse(localBranch.observation_json) as LocalBranchIntent,
+            operation_id: localBranch.operation_id,
+            recorded_at: localBranch.recorded_at,
+        } : null,
     };
 }
 
@@ -460,9 +476,9 @@ export async function reviewAutomationDecision(db: D1Database, scope: TeamScope,
               AND NOT EXISTS (SELECT 1 FROM automation_work newer WHERE newer.report_public_id=w.report_public_id AND newer.event_cursor>w.event_cursor)
               ${approve ? "AND w.decision_outcome='review_required' AND w.report_revision=r.report_revision" : ''}
         ) ${repo ? `AND EXISTS (SELECT 1 FROM automation_repositories a WHERE a.project_id=?1 AND a.environment=?2 AND a.scope_revision=?3
-                      AND a.repo_id=?11 AND a.base_commit=?12 AND a.required_check_ids=?13)` : ''}`,
+                      AND a.repo_id=?11 AND a.base_commit=?12 AND a.required_check_ids=?13 AND a.delivery_mode=?14)` : ''}`,
         [...scopeBindings(scope), developer.id, work.work_id, publicId, input.input_revision, input.decision_revision, input.report_revision,
-            Number(rebase), ...(repo ? [repo.repo_id, repo.base_commit, repo.required_check_ids] : [])]);
+            Number(rebase), ...(repo ? [repo.repo_id, repo.base_commit, repo.required_check_ids, repo.delivery_mode] : [])]);
         const outcome = approve ? 'repair_authorized' : 'analysis_requested';
         return [
             guard,
@@ -487,40 +503,61 @@ async function repositoryForApproval(db: D1Database, scope: Scope, work: Work, d
     const proposal = analysis.proposal;
     if (!proposal || !hasRepairBasis(analysis)) throw conflict();
     const repo = await repositoryFor(db, scope, proposal);
-    if (!repoMatches(repo, proposal)) throw conflict();
+    if (!repoMatches(repo, proposal) || decision.delivery_mode !== repo.delivery_mode) throw conflict();
     return repo;
+}
+
+async function repairTarget(
+    db: D1Database, scope: AutomationScope, lease: Lease, mode: DeliveryMode, payload: LocalBranchIntent,
+) {
+    const work = await activeWork(db, scope, lease);
+    const grant = await repairGrant(db, scope, work);
+    if (!grant || grant.delivery_mode !== mode || payload.input_revision !== work.input_revision
+        || payload.proposal_revision !== grant.proposal_revision || payload.proposal_digest !== grant.proposal_digest
+        || payload.repo_id !== grant.repo_id || payload.base_commit !== grant.base_commit
+        || payload.target_branch !== grant.base_branch || payload.head_sha === payload.base_commit) throw conflict();
+    const repo = await repositoryFor(db, scope, grant.proposal);
+    if (!repoMatches(repo, grant.proposal) || repo.delivery_mode !== mode || payload.target_branch !== repo.base_branch
+        || !payload.source_branch.startsWith(repo.branch_prefix) || payload.source_branch === repo.branch_prefix || payload.source_branch === payload.target_branch
+        || !checkIdsMatch(repo, payload.check_results.map(({ check_id }) => check_id))) throw conflict();
+    return {
+        repo,
+        sql: `AND w.input_revision=?14 AND w.proposal_revision=?15 AND w.next_action='repair' AND w.decision_outcome='repair_authorized'
+            AND EXISTS (
+                SELECT 1 FROM automation_repositories a JOIN automation_decisions d ON d.work_id=w.work_id AND d.decision_revision=w.proposal_revision
+                WHERE a.project_id=?1 AND a.environment=?2 AND a.scope_revision=?3 AND a.repo_id=?16 AND a.gitlab_project_id IS ?17
+                    AND a.base_branch=?18 AND a.base_commit=?19 AND a.branch_prefix=?20 AND a.required_check_ids=?21
+                    AND a.delivery_mode='${mode}' AND a.delivery_mode=d.delivery_mode
+            )`,
+        values: [payload.input_revision, payload.proposal_revision, repo.repo_id, repo.gitlab_project_id,
+            repo.base_branch, repo.base_commit, repo.branch_prefix, repo.required_check_ids],
+    };
 }
 
 export async function typedGitGuard(
     db: D1Database, scope: AutomationScope, lease: Lease, operationType: string, payload: GitIntent,
 ) {
-    const work = await activeWork(db, scope, lease);
-    const grant = await repairGrant(db, scope, work);
-    if (!grant || payload.input_revision !== work.input_revision || payload.proposal_revision !== grant.proposal_revision
-        || payload.proposal_digest !== grant.proposal_digest || payload.repo_id !== grant.repo_id || payload.base_commit !== grant.base_commit
-        || payload.target_branch !== grant.base_branch || payload.head_sha === payload.base_commit) throw conflict();
-    const [repo, policy] = await Promise.all([repositoryFor(db, scope, grant.proposal), policyFor(db, scope)]);
-    if (!repo || !policy || policy.gitlab_instance_id !== payload.gitlab_instance_id || repo.gitlab_project_id !== payload.project_id
-        || !payload.source_branch.startsWith(repo.branch_prefix) || payload.source_branch === payload.target_branch
-        || !checkIdsMatch(repo, payload.check_results.map(({ check_id }) => check_id))) throw conflict();
+    const target = await repairTarget(db, scope, lease, 'gitlab', payload);
+    const policy = await policyFor(db, scope);
+    if (!policy || policy.gitlab_instance_id !== payload.gitlab_instance_id || target.repo.gitlab_project_id !== payload.project_id) throw conflict();
     const payloadHash = await sha256Hex(canonicalJson({ ...payload }));
     return {
         payloadHash,
         policy,
-        repo,
         guard: {
-            sql: `AND w.input_revision=?14 AND w.proposal_revision=?15 AND w.next_action='repair' AND w.decision_outcome='repair_authorized'
-                AND EXISTS (SELECT 1 FROM automation_repositories a JOIN automation_policies p USING (project_id, environment, scope_revision)
-                    WHERE a.project_id=?1 AND a.environment=?2 AND a.scope_revision=?3 AND a.repo_id=?16 AND a.gitlab_project_id=?17
-                      AND a.base_branch=?18 AND a.base_commit=?19 AND a.branch_prefix=?20 AND a.required_check_ids=?21 AND p.gitlab_instance_id=?22)
+            sql: `${target.sql}
+                AND EXISTS (SELECT 1 FROM automation_policies p WHERE p.project_id=?1 AND p.environment=?2 AND p.scope_revision=?3 AND p.gitlab_instance_id=?22)
                 ${operationType === GIT_MR ? `AND EXISTS (SELECT 1 FROM automation_operations push WHERE push.project_id=?1 AND push.environment=?2
                     AND push.work_id=?5 AND push.report_revision=?7 AND push.operation_type='git.push_branch'
                     AND push.payload_hash=?23 AND push.recorded_at IS NOT NULL)` : ''}`,
-            values: [payload.input_revision, payload.proposal_revision, repo.repo_id, repo.gitlab_project_id, repo.base_branch,
-                repo.base_commit, repo.branch_prefix, repo.required_check_ids, payload.gitlab_instance_id,
-                ...(operationType === GIT_MR ? [payloadHash] : [])],
+            values: [...target.values, payload.gitlab_instance_id, ...(operationType === GIT_MR ? [payloadHash] : [])],
         },
     };
+}
+
+export async function typedLocalBranchGuard(db: D1Database, scope: AutomationScope, lease: Lease, payload: LocalBranchIntent) {
+    const { sql, values } = await repairTarget(db, scope, lease, 'local', payload);
+    return { sql, values };
 }
 
 function gitProofMessage(scope: Scope, command: Command & { input_revision: number }, observation: GitObservation) {
@@ -588,6 +625,37 @@ export async function linkAutomationMr(env: Env, scope: AutomationScope, lease: 
                     scope.project_id, scope.environment, command.operation_id),
                 ...releaseWork(db, command.work_id, outcome, 'waiting_review', 'repair', report.id, command.proposal_revision),
                 saveCommandReceipt(db, scope, command, { mr_id, mr_iid, web_url }),
+            ];
+        });
+}
+
+export async function recordLocalBranch(db: D1Database, scope: AutomationScope, lease: Lease, command: Command & {
+    observation: LocalBranchIntent;
+}) {
+    const { observation } = command;
+    return executeCommand(db, scope, command, { kind: 'local_branch', ...workSemantic(lease, observation.input_revision), observation },
+        async () => {
+            const guard = await typedLocalBranchGuard(db, scope, lease, observation);
+            const report = await readReport(db, scope.project_id, lease.report_public_id).first<Report>();
+            if (!report) throw conflict();
+            const result = canonicalJson({ ...observation });
+            const payloadHash = await sha256Hex(result);
+            return [
+                assertion(db, `EXISTS (SELECT 1 FROM automation_work w WHERE ${ACTIVE_LEASE} ${guard.sql})
+                    AND EXISTS (SELECT 1 FROM automation_operations o WHERE o.project_id=?1 AND o.environment=?2 AND o.work_id=?5
+                        AND o.report_revision=?7 AND o.operation_id=?10 AND o.operation_type='git.local_branch'
+                        AND o.payload_hash=?11 AND o.recorded_at IS NULL)
+                    AND NOT EXISTS (SELECT 1 FROM automation_local_branches WHERE work_id=?5 AND decision_revision=?15)`,
+                    [...leaseBindings(scope, lease), command.operation_id, payloadHash, null, null, ...guard.values]),
+                db.prepare(`INSERT INTO automation_local_branches (work_id, decision_revision, operation_id, observation_json, recorded_at)
+                    VALUES (?,?,?,?,${SQL_NOW})`).bind(command.work_id, observation.proposal_revision, command.operation_id, result),
+                db.prepare(`UPDATE automation_operations SET result_json=?, result_hash=?, recorded_at=${SQL_NOW}, recorded_by=?, recorded_generation=?
+                    WHERE project_id=? AND environment=? AND operation_id=?`).bind(result, payloadHash, lease.worker_id, lease.lease_generation,
+                    scope.project_id, scope.environment, command.operation_id),
+                ...releaseWork(db, command.work_id, 'local_branch_ready', 'waiting_review', 'repair', report.id, observation.proposal_revision),
+                saveCommandReceipt(db, scope, command, {
+                    repo_id: observation.repo_id, source_branch: observation.source_branch, target_branch: observation.target_branch, head_sha: observation.head_sha,
+                }),
             ];
         });
 }

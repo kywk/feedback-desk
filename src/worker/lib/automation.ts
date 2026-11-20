@@ -1,7 +1,7 @@
 import { sha256Hex } from './crypto';
 import { messageTarget, type MessageTarget } from './db';
 
-const SQL_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+export const SQL_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 const SQL_LEASE_END = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+60 seconds')";
 const EVENT_PAGE_SIZE = 100;
 
@@ -145,7 +145,7 @@ function assertLease<T>(row: T | null | undefined): T {
 }
 
 // Lease validity, report liveness and revocable credentials are checked at the guarded write.
-const ACTIVE_LEASE = `
+export const ACTIVE_LEASE = `
     w.project_id = ?1 AND w.environment = ?2 AND w.scope_revision = ?3 AND w.lease_token_hash = ?4
     AND w.work_id = ?5 AND w.report_public_id = ?6 AND w.report_revision = ?7 AND w.lease_generation = ?8 AND w.worker_id = ?9
     AND w.revoked_reason IS NULL AND w.stage IN ('queued', 'running') AND w.lease_expires_at > ${SQL_NOW}
@@ -158,7 +158,7 @@ const ACTIVE_LEASE = `
             AND t.token_hash = w.lease_token_hash AND t.revoked_at IS NULL
     )`;
 
-function leaseBindings(scope: AutomationScope, lease: Lease): [number, string, string, string, string, string, number, number, string] {
+export function leaseBindings(scope: AutomationScope, lease: Lease): [number, string, string, string, string, string, number, number, string] {
     assertScopeRevision(scope, lease.scope_revision);
     return [
         scope.project_id, scope.environment, lease.scope_revision, scope.tokenHash,
@@ -173,6 +173,7 @@ export async function claimAutomationWork(db: D1Database, scope: AutomationScope
     const row = await db.prepare(
         `UPDATE automation_work SET
             stage = CASE WHEN automation_work.report_revision <> r.report_revision THEN 'queued' ELSE stage END,
+            next_action = CASE WHEN automation_work.report_revision <> r.report_revision THEN 'analyze' ELSE next_action END,
             progress_json = CASE WHEN automation_work.report_revision <> r.report_revision THEN NULL ELSE progress_json END,
             retry_at = NULL,
             report_revision = r.report_revision, worker_id = ?5, lease_token_hash = ?4, lease_expires_at = ${SQL_LEASE_END},
@@ -233,7 +234,7 @@ interface OperationRow {
     recorded_at: string | null;
 }
 
-function canonicalJson(data: Data): string {
+export function canonicalJson(data: Data): string {
     try {
         return JSON.stringify(data, (_key, value: unknown) => {
             if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
@@ -261,6 +262,7 @@ function receiptView(row: OperationRow, reportPublicId: string) {
 export async function recordAutomationIntent(
     db: D1Database, scope: AutomationScope, lease: Lease,
     operation: { operation_id: string; correlation_id: string; operation_type: string; payload: Data },
+    additionalGuard?: { sql: string; values: (string | number)[] },
 ) {
     const bindings = leaseBindings(scope, lease);
     const hash = await sha256Hex(canonicalJson(operation.payload));
@@ -268,12 +270,12 @@ export async function recordAutomationIntent(
     const row = await db.prepare(
         `INSERT INTO automation_operations (project_id, environment, operation_id, work_id, report_revision, correlation_id, operation_type, payload_hash, worker_id, lease_generation, created_at)
          SELECT ?1, ?2, ?10, ?5, ?7, ?11, ?12, ?13, ?9, ?8, ${SQL_NOW}
-         WHERE EXISTS (SELECT 1 FROM automation_work w WHERE ${ACTIVE_LEASE})
+         WHERE EXISTS (SELECT 1 FROM automation_work w WHERE ${ACTIVE_LEASE} ${additionalGuard?.sql ?? ''})
          ON CONFLICT (project_id, environment, operation_id) DO UPDATE SET operation_id = excluded.operation_id
          WHERE work_id = excluded.work_id AND report_revision = excluded.report_revision
              AND correlation_id = excluded.correlation_id AND operation_type = excluded.operation_type AND payload_hash = excluded.payload_hash
          RETURNING *`,
-    ).bind(...bindings, operation.operation_id, operation.correlation_id, operation.operation_type, hash).first<OperationRow>();
+    ).bind(...bindings, operation.operation_id, operation.correlation_id, operation.operation_type, hash, ...(additionalGuard?.values ?? [])).first<OperationRow>();
     if (!row) {
         throw new AutomationError('operation_conflict', 409, '操作內容或租約與此次請求不符。');
     }
@@ -301,6 +303,7 @@ export async function recordAutomationReceipt(db: D1Database, scope: AutomationS
             recorded_at = COALESCE(recorded_at, ${SQL_NOW}), recorded_by = COALESCE(recorded_by, ?9),
             recorded_generation = COALESCE(recorded_generation, ?8)
          WHERE project_id = ?1 AND environment = ?2 AND operation_id = ?10 AND work_id = ?5 AND report_revision = ?7
+             AND operation_type <> 'gitlab.create_merge_request'
              AND (result_hash IS NULL OR result_hash = ?12)
              AND EXISTS (SELECT 1 FROM automation_work w WHERE ${ACTIVE_LEASE})
          RETURNING *`,

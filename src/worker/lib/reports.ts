@@ -232,38 +232,56 @@ export function storedFileStatements(db: D1Database, reportId: number, messageId
     );
 }
 
-/**
- * Adds a message (web, API, MCP, patrol, a sent draft). Unless `applyStatusRule` is false (the
- * notice left when the team shares a new report with the client), the status rule above runs in
- * the same batch. Returns the new message id and the report status afterwards.
- */
+interface NewMessage {
+    author_type: 'reporter' | 'owner';
+    author_name: string | null;
+    body: string;
+    uploads: Upload[];
+    author?: Author;
+    storedFiles?: StoredFile[];
+    applyStatusRule?: boolean;
+    extraStatements?: D1PreparedStatement[];
+    beforeStatements?: D1PreparedStatement[];
+    isCompletionRequest?: boolean;
+}
+
+/** Compose a message and its status/event changes inside the caller's D1 transaction. */
+export function addMessageStatements(db: D1Database, report: Report, data: NewMessage, at: string) {
+    const target = { justInsertedForReport: report.id };
+    const rule = data.applyStatusRule === false ? { next: null, statements: [] } : statusRuleStatements(db, report, data.author_type === 'owner', at, data.author);
+    return {
+        status: rule.next ?? report.status,
+        statusChanged: rule.next !== null,
+        statements: [
+            ...(data.beforeStatements ?? []),
+            db.prepare(
+                'INSERT INTO messages (report_id, author_type, author_name, author_client_account_id, author_developer_id, author_agent, body, is_completion_request, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+            ).bind(report.id, data.author_type, data.author_name, data.author?.clientAccountId ?? null, data.author?.developerId ?? null, data.author?.agent ?? null, data.body, data.isCompletionRequest ? 1 : 0, at, at),
+            ...claimStatements(db, data.uploads, { reportPublicId: report.public_id, kind: 'feedback', messageId: target, nowIso: at, author: data.author }),
+            ...storedFileStatements(db, report.id, target, data.storedFiles ?? [], at, data.author),
+            db.prepare('UPDATE reports SET latest_activity_at = ?, updated_at = ? WHERE id = ?').bind(at, at, report.id),
+            ...(data.author ? [eventStatement(db, report, 'message', data.author, at)] : []),
+            ...rule.statements,
+            ...(data.extraStatements ?? []),
+            ...(data.author_type === 'reporter' && report.creator_type === 'client' ? [customerReplyEvent(db, report.id, target, at)] : []),
+        ],
+    };
+}
+
+/** Adds a message via the existing web, API, MCP, patrol and draft entry points. */
 export async function addMessage(
     env: Env,
     report: Report,
-    data: { author_type: 'reporter' | 'owner'; author_name: string | null; body: string; uploads: Upload[]; author?: Author; storedFiles?: StoredFile[]; applyStatusRule?: boolean; extraStatements?: D1PreparedStatement[]; isCompletionRequest?: boolean },
+    data: NewMessage,
     now = Date.now(),
 ): Promise<{ id: number; status: ReportStatus; statusChanged: boolean }> {
-    const db = env.DB;
-    const at = nowIso(now);
-    const target = { justInsertedForReport: report.id };
-    const rule = data.applyStatusRule === false ? { next: null, statements: [] } : statusRuleStatements(db, report, data.author_type === 'owner', at, data.author);
-    const [inserted] = await db.batch<{ id: number }>([
-        db.prepare(
-            'INSERT INTO messages (report_id, author_type, author_name, author_client_account_id, author_developer_id, author_agent, body, is_completion_request, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-        ).bind(report.id, data.author_type, data.author_name, data.author?.clientAccountId ?? null, data.author?.developerId ?? null, data.author?.agent ?? null, data.body, data.isCompletionRequest ? 1 : 0, at, at),
-        ...claimStatements(db, data.uploads, { reportPublicId: report.public_id, kind: 'feedback', messageId: target, nowIso: at, author: data.author }),
-        ...storedFileStatements(db, report.id, target, data.storedFiles ?? [], at, data.author),
-        db.prepare('UPDATE reports SET latest_activity_at = ?, updated_at = ? WHERE id = ?').bind(at, at, report.id),
-        ...(data.author ? [eventStatement(db, report, 'message', data.author, at)] : []),
-        ...rule.statements,
-        ...(data.extraStatements ?? []),
-        ...(data.author_type === 'reporter' && report.creator_type === 'client' ? [customerReplyEvent(db, report.id, target, at)] : []),
-    ]);
-    const message = inserted.results[0];
+    const { status, statusChanged, statements } = addMessageStatements(env.DB, report, data, nowIso(now));
+    const batch = await env.DB.batch<{ id: number }>(statements);
+    const message = batch[data.beforeStatements?.length ?? 0].results[0];
     if (!message) {
         throw new Error('message insert returned no id');
     }
-    return { id: message.id, status: rule.next ?? report.status, statusChanged: rule.next !== null };
+    return { id: message.id, status, statusChanged };
 }
 
 /** 找這張單裡還沒收回的留言；收回的留言一律當作不存在。 */

@@ -1929,9 +1929,9 @@ web.post('/p/:slug/reports/:publicId/drafts/:draftId/send', async (c) => {
     } catch (error) {
         if (error instanceof ServiceError) {
             if (wantsJson(c)) {
-                return c.json({ message: error.message, errors: { body: [error.message] } }, 422);
+                return c.json({ message: error.message, errors: { body: [error.message] } }, error.status === 409 ? 409 : 422);
             }
-            abort(422, error.message);
+            abort(error.status === 409 ? 409 : 422, error.message);
         }
         throw error;
     }

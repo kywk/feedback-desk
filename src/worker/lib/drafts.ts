@@ -20,6 +20,7 @@ import {
     type StoredFile,
 } from './reports';
 import { ServiceError } from './team';
+import { automationDraftSend, failedAutomationAssertion } from './automation-decisions';
 import type { ReportStatus } from '../../shared/status';
 
 export interface MessageDraft {
@@ -149,6 +150,7 @@ export async function sendDraft(
     now = Date.now(),
     editedBody: string | null = null,
 ): Promise<{ replaced: boolean; status: ReportStatus; statusChanged: boolean }> {
+    const originalDraft = draft;
     if (editedBody !== null) {
         // 送出前在畫面上改過的文字（右下角對話面板）以它為準；空白照樣拒絕，草稿保留。
         draft = { ...draft, body: validatedDraftBody(editedBody) };
@@ -158,12 +160,20 @@ export async function sendDraft(
     const files = parseStoredFiles(draft.attachments);
     const deleteDraft = db.prepare('DELETE FROM message_drafts WHERE id = ?').bind(draft.id);
     if (draft.replaces_message_id === null) {
+        const guarded = await automationDraftSend(db, report, originalDraft, sender.author.developerId);
         const result = await addMessage(
             env,
             report,
-            { author_type: 'owner', author_name: messageAuthorName(env, report, true, sender.developerName), body: draft.body, uploads: [], storedFiles: files, author, extraStatements: [deleteDraft] },
+            {
+                author_type: 'owner', author_name: messageAuthorName(env, report, true, sender.developerName), body: draft.body, uploads: [],
+                storedFiles: files, author, beforeStatements: [guarded.before],
+                extraStatements: guarded.after ? [guarded.after, deleteDraft] : [deleteDraft],
+            },
             now,
-        );
+        ).catch((error: unknown) => {
+            if (failedAutomationAssertion(error)) throw new ServiceError('automation_draft_conflict', '自動化草稿已失效，或你沒有此專案的審查權限。', 409);
+            throw error;
+        });
         await markRead(env, report, 'owner', now);
         return { replaced: false, status: result.status, statusChanged: result.statusChanged };
     }

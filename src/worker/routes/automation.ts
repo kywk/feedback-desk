@@ -1,6 +1,8 @@
 import { Hono, type HonoRequest } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
+import { AnalysisError, parseAnalysis } from '../../shared/automation-analysis.mjs';
+import { applyAutomationDecision, automationInput, GIT_MR, GIT_PUSH, linkAutomationMr, typedGitGuard } from '../lib/automation-decisions';
 import {
     AUTOMATION_STAGES, AutomationError, automationScope, claimAutomationWork, listAutomationEvents,
     recordAutomationIntent, recordAutomationReceipt, renewAutomationWork, saveAutomationProgress, type AutomationScope,
@@ -28,8 +30,8 @@ automation.use(`${scopePath}/*`, bodyLimit({
     onError: (c) => c.json({ error: 'body_too_large', message: '請求內容超出限制。' }, 413),
 }));
 
-const identifier = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/);
-const revision = z.number().int().positive();
+export const identifier = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/);
+export const revision = z.number().int().positive();
 const data = z.record(z.string(), z.unknown());
 const claim = z.strictObject({ worker_id: identifier, scope_revision: identifier });
 const lease = claim.extend({
@@ -51,7 +53,36 @@ const intent = lease.extend({
 });
 const receipt = lease.extend({ operation_id: identifier, result: data });
 
-async function readInput<T>(request: HonoRequest, schema: z.ZodType<T>): Promise<T> {
+const digest = z.string().regex(/^[a-f0-9]{64}$/);
+const commit = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+const branch = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/);
+const gitIntent = z.strictObject({
+    proposal_revision: revision,
+    proposal_digest: digest,
+    input_revision: revision,
+    repo_id: identifier,
+    base_commit: commit,
+    gitlab_instance_id: identifier,
+    project_id: revision,
+    source_branch: branch,
+    target_branch: branch,
+    head_sha: commit,
+    check_results: z.array(z.strictObject({ check_id: identifier, status: z.literal('passed') })).min(1).max(10),
+});
+const observation = gitIntent.extend({
+    mr_id: revision,
+    mr_iid: revision,
+    web_url: z.string().max(2048),
+    state: z.enum(['opened', 'merged']),
+    observed_at: z.iso.datetime(),
+});
+const decision = lease.extend({ input_revision: revision, operation_id: identifier, correlation_id: identifier, analysis: z.unknown() });
+const mr = lease.extend({
+    input_revision: revision, operation_id: identifier, proposal_revision: revision, proposal_digest: digest,
+    observation, proof: digest,
+});
+
+export async function readInput<T>(request: HonoRequest, schema: z.ZodType<T>): Promise<T> {
     let body: unknown;
     try {
         body = await request.json();
@@ -92,10 +123,41 @@ automation.post(`${scopePath}/progress`, async (c) => {
 
 automation.post(`${scopePath}/operations/intent`, async (c) => {
     const input = await readInput(c.req, intent);
-    return c.json(await recordAutomationIntent(c.env.DB, c.get('automationScope'), input, input));
+    const scope = c.get('automationScope');
+    const db = c.env.DB;
+    if (input.operation_type === GIT_PUSH || input.operation_type === GIT_MR) {
+        const typed = gitIntent.safeParse(input.payload);
+        if (!typed.success) throw new AutomationError('invalid_request', 400, '外部操作欄位或格式不符。');
+        const { guard } = await typedGitGuard(db, scope, input, input.operation_type, typed.data);
+        return c.json(await recordAutomationIntent(db, scope, input, { ...input, payload: typed.data }, guard));
+    }
+    return c.json(await recordAutomationIntent(db, scope, input, input));
 });
 
 automation.post(`${scopePath}/operations/receipt`, async (c) => {
     const input = await readInput(c.req, receipt);
     return c.json(await recordAutomationReceipt(c.env.DB, c.get('automationScope'), input, input.operation_id, input.result));
+});
+
+automation.post(`${scopePath}/input`, async (c) => {
+    const input = await readInput(c.req, lease);
+    return c.json(await automationInput(c.env.DB, c.get('automationScope'), input));
+});
+
+automation.post(`${scopePath}/decisions`, async (c) => {
+    const input = await readInput(c.req, decision);
+    try {
+        const analysis = parseAnalysis(input.analysis);
+        return c.json(await applyAutomationDecision(c.env, c.get('automationScope'), input, { ...input, analysis }));
+    } catch (error) {
+        if (error instanceof AnalysisError) {
+            return c.json({ error: error.code, field: error.field, message: '分析資料欄位或格式不符。' }, 400);
+        }
+        throw error;
+    }
+});
+
+automation.post(`${scopePath}/mr-links`, async (c) => {
+    const input = await readInput(c.req, mr);
+    return c.json(await linkAutomationMr(c.env, c.get('automationScope'), input, input));
 });

@@ -1,4 +1,8 @@
 import { Hono, type MiddlewareHandler } from 'hono';
+import { z } from 'zod';
+import { AutomationError } from '../lib/automation';
+import { automationReviewState, automationTeamScope, reviewAutomationDecision } from '../lib/automation-decisions';
+import { identifier, readInput, revision } from './automation';
 import { nowIso } from '../../shared/time';
 import { randomString, sha256Hex } from '../lib/crypto';
 import { findClientAccount, findDeveloper, findDeveloperByUsername, findProjectBySlug, findReportInProject } from '../lib/db';
@@ -111,7 +115,7 @@ async function body<T>(c: AppContext): Promise<T> {
 }
 
 api.onError((error, c) => {
-    if (error instanceof team.ServiceError) {
+    if (error instanceof team.ServiceError || error instanceof AutomationError) {
         return c.json({ error: error.code, message: error.message }, error.status);
     }
     throw error;
@@ -307,6 +311,51 @@ api.get('/projects/:slug/reports/:ref', async (c) => {
     }
     return c.json(await team.getReport(ctx(c), c.req.param('slug'), c.req.param('ref'), lookupMode(c)));
 });
+const teamAutomationPath = '/projects/:slug/reports/:ref/automation/:environment';
+const teamDecisionFields = {
+    action_id: identifier, work_id: identifier, input_revision: revision, report_revision: revision,
+    scope_revision: identifier, decision_revision: revision,
+};
+const teamReview = z.discriminatedUnion('action', [
+    z.strictObject({ ...teamDecisionFields, action: z.literal('approve'), proposal_digest: z.string().regex(/^[a-f0-9]{64}$/) }),
+    z.strictObject({ ...teamDecisionFields, action: z.literal('request_changes'), reason: z.string().trim().min(1).max(500) }),
+]);
+const evidenceRef = z.string().max(240).refine((value) => {
+    if (/^ev:[a-f0-9]{64}$/.test(value)) return true;
+    const match = /^(?:repo|guide):[A-Za-z0-9][A-Za-z0-9_.-]*:([A-Za-z0-9_.-][A-Za-z0-9_./-]*)$/.exec(value);
+    return !!match && match[1].split('/').every(part => part !== '' && part !== '.' && part !== '..');
+});
+const teamEvidence = z.strictObject({
+    ...teamDecisionFields, reason: z.string().trim().min(1).max(500),
+    evidence_refs: z.array(evidenceRef).max(16),
+});
+
+async function teamAutomationContext(c: AppContext) {
+    const { developer } = ctx(c);
+    const scope = await automationTeamScope(c.env.DB, c.req.param('slug') ?? '', c.req.param('environment') ?? '', developer);
+    if (!scope) throw new team.ServiceError('automation_review_forbidden', '需要此專案環境的自動化審查權限。', 403);
+    return { scope, developer };
+}
+
+api.get(teamAutomationPath, async (c) => {
+    const { scope } = await teamAutomationContext(c);
+    const snapshot = await automationReviewState(c.env.DB, scope, c.req.param('ref'), c.req.query('work_id'));
+    if (!snapshot) throw new team.ServiceError('report_not_found', '找不到這張回饋單。', 404);
+    return c.json(snapshot);
+});
+
+api.post(`${teamAutomationPath}/review`, async (c) => {
+    const { scope, developer } = await teamAutomationContext(c);
+    const input = await readInput(c.req, teamReview);
+    return c.json(await reviewAutomationDecision(c.env.DB, scope, developer, c.req.param('ref'), input));
+});
+
+api.post(`${teamAutomationPath}/evidence`, async (c) => {
+    const { scope, developer } = await teamAutomationContext(c);
+    const input = await readInput(c.req, teamEvidence);
+    return c.json(await reviewAutomationDecision(c.env.DB, scope, developer, c.req.param('ref'), { ...input, action: 'provide_evidence' }));
+});
+
 api.post('/projects/:slug/reports/:ref/status', async (c) => {
     const input = await body<{ status?: string; force?: boolean }>(c);
     return c.json(await team.setReportStatus(ctx(c), c.req.param('slug'), c.req.param('ref'), String(input.status ?? ''), { force: input.force === true }));

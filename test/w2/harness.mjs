@@ -16,11 +16,11 @@ const proofKeyRef = 'FEEDBACK_AUTOMATION_QA_PROOF_KEY';
 const testImage = 'node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293';
 const fixtures = JSON.parse(await readFile(new URL('../../scripts/agents/fixtures/projects.json', import.meta.url), 'utf8'));
 const todomvc = fixtures.find(spec => spec.id === 'todomvc');
-async function startDesk(proofKey) {
+async function startDesk(proofKey, { port = 0, persistencePath } = {}) {
   const root = resolve('dist/worker');
   const chunks = (await readdir(root)).filter(name => name.endsWith('.js') && name !== 'index.js');
   const modules = ['index.js', ...chunks].map(name => ({ type: 'ESModule', path: resolve(root, name) }));
-  const mf = new Miniflare(convertV4MiniflareOptions({ host: '127.0.0.1', port: 0, modules, modulesRoot: root, compatibilityDate: '2026-10-01', compatibilityFlags: ['nodejs_compat'], d1Databases: ['DB'], r2Buckets: ['FILES'], bindings: { APP_SECRET: 'qa-secret-only-not-for-production-0123456789', [proofKeyRef]: proofKey } }));
+  const mf = new Miniflare(convertV4MiniflareOptions({ host: '127.0.0.1', port, ...(persistencePath && { resourcePersistencePath: persistencePath }), modules, modulesRoot: root, compatibilityDate: '2026-10-01', compatibilityFlags: ['nodejs_compat'], d1Databases: ['DB'], r2Buckets: ['FILES'], bindings: { APP_SECRET: 'qa-secret-only-not-for-production-0123456789', [proofKeyRef]: proofKey } }));
   try {
     const url = (await mf.ready).origin; const db = await mf.getD1Database('DB');
     for (const migration of await readD1Migrations(resolve('migrations'))) await db.batch(migration.queries.map(query => db.prepare(query)));
@@ -120,12 +120,12 @@ async function prepareFixture(root, local) {
   return { repository: { id: 'fixture-repo', directory, remote, base_branch: 'main', base_commit: commit, read_paths: ['src'], repair }, bare };
 }
 
-export async function harness({ local = false, catalogPath, gitlab } = {}) {
+export async function harness({ local = false, catalogPath, gitlab, deskOptions } = {}) {
   if (gitlab && (local || !catalogPath)) throw new Error('live GitLab requires a TodoMVC catalog');
   if (catalogPath && !local && !gitlab) throw new Error('catalog requires a delivery mode');
   const root = await realpath(await mkdtemp(join(tmpdir(), 'fd-w2-qa-')));
   const proofKey = gitlab ? randomBytes(32).toString('hex') : fixtureProofKey;
-  const desk = await startDesk(proofKey);
+  const desk = await startDesk(proofKey, deskOptions);
   const model = await startModel(catalogPath ? { repoId: 'todomvc', path: 'examples/javascript-es5/src/model.js', before: 'title = title || "";', after: 'title = (title || "").trim();\n        if (!title) return;', checkId: 'blank-title' } : {});
   try {
     const catalog = catalogPath ? JSON.parse(await readFile(catalogPath, 'utf8')) : null;
@@ -182,7 +182,8 @@ export async function harness({ local = false, catalogPath, gitlab } = {}) {
     async function work(id) { return desk.db.prepare('SELECT * FROM automation_work WHERE report_public_id=? ORDER BY input_revision DESC LIMIT 1').bind(id).first(); }
     async function decisions(id) { return (await desk.db.prepare('SELECT * FROM automation_decisions WHERE work_id=? ORDER BY decision_revision').bind(id).all()).results; }
     async function teamGet(id) { return fetch(`${desk.url}/api/v1/projects/${a.slug}/reports/${id}/automation/${environment}`, { headers: { authorization: `Bearer ${token}` } }); }
+    async function retestRun(runId) { return fetch(`${desk.url}/api/v1/projects/${a.slug}/automation/${environment}/retest-runs/${runId}`, { headers: { authorization: `Bearer ${token}` } }); }
     async function human(id, endpoint, body) { return fetch(`${desk.url}/api/v1/projects/${a.slug}/reports/${id}/automation/${environment}/${endpoint}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) }); }
-    return { desk, model, a, b, root, commit, config, bare, repo, remote, report, work, decisions, runWorker, runRepairWorker, teamGet, human, close: async () => { await model.close(); await desk.close(); await rm(root, { recursive: true, force: true }); } };
+    return { desk, model, a, b, root, commit, config, bare, repo, remote, report, work, decisions, runWorker, runRepairWorker, teamGet, retestRun, human, close: async () => { await model.close(); await desk.close(); await rm(root, { recursive: true, force: true }); } };
   } catch (error) { await model.close(); await desk.close(); await rm(root, { recursive: true, force: true }); throw error; }
 }

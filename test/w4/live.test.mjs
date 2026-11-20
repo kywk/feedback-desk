@@ -6,14 +6,12 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { harness } from '../w2/harness.mjs';
 import { deployTodoMVC, regressOnTestBranch } from './release.mjs';
-import { base, checkKey, component, digest, environment, eventually, gitLabSettings, inspect, projectSlug, repair,
+import { base, callWhippet, checkKey, component, digest, environment, eventually, gitLabSettings, inspect, projectSlug, repair,
     replayInspection, runCli, scopeRevision, signManifest, testId, versionId, whippetOrigin, workspace } from './journey.mjs';
 
 async function holdFirstResult(desk) {
     let holding = true;
     let held;
-    let injectInfrastructure = false;
-    let injectedReceipt;
     const server = createServer(async (req, res) => {
         try {
             const url = new URL(req.url, desk);
@@ -21,15 +19,6 @@ async function holdFirstResult(desk) {
             const chunks = [];
             for await (const chunk of req) chunks.push(chunk);
             const data = Buffer.concat(chunks);
-            if (injectInfrastructure && url.pathname.endsWith('/retest-results')) {
-                const result=JSON.parse(data);
-                const injected={...result,outcome:'infrastructure',checks:[],evidence_refs:[]};
-                const upstream=await fetch(url,{method:'POST',redirect:'error',headers:{authorization:req.headers.authorization,'content-type':'application/json'},body:JSON.stringify(injected)});
-                const body=await upstream.text();
-                if (upstream.ok) injectedReceipt=JSON.parse(body);
-                injectInfrastructure=false;
-                return res.writeHead(upstream.status,{'content-type':'application/json'}).end(body);
-            }
             if (holding && url.pathname.endsWith('/retest-results')) {
                 held = { url, data, token: req.headers.authorization };
                 return res.writeHead(503).end();
@@ -44,8 +33,6 @@ async function holdFirstResult(desk) {
     return {
         origin:'http://127.0.0.1:'+server.address().port,
         hasResult:()=>Boolean(held),
-        injectInfrastructure(){injectInfrastructure=true;},
-        injectedReceipt:()=>injectedReceipt,
         resume(){holding=false;},
         hold(){holding=true;held=undefined;},
         async deliverLate(transform = value => value){
@@ -98,9 +85,9 @@ test('actual GitLab repair, release, deployment retest and case disposition', {s
     const reportStatus=id=>h.desk.db.prepare('SELECT status FROM reports WHERE public_id=?').bind(id).first('status');
     const closePolicy=value=>h.desk.db.prepare('UPDATE automation_policies SET auto_close_inspections=? WHERE project_id=? AND environment=?').bind(value,h.a.id,environment).run();
     const evidence={prefix,deployments:[]};
-    async function deploy(n,sha,commits=[sha]){
+    async function deploy(n,sha,commits=[sha],modelRevision=sha){
         const id=prefix+'-'+n;
-        await deployTodoMVC(releases,id,sha);
+        await deployTodoMVC(releases,id,sha,modelRevision);
         const manifest=await signManifest(dir,n,id,sha,'succeeded',commits);
         await cli('--ingest','w4',manifest.path,manifest.sig);
         await cli('--ingest','w4',manifest.path,manifest.sig);
@@ -133,15 +120,15 @@ test('actual GitLab repair, release, deployment retest and case disposition', {s
     const wrongEnvironment=await signManifest(dir,2,prefix+'-wrong-environment',mr.head_sha,'succeeded',[mr.head_sha],'production');
     await assert.rejects(cli('--ingest','w4',wrongEnvironment.path,wrongEnvironment.sig));
     assert.equal(await intent(prefix+'-wrong-environment'),null);
-    // Inject an infrastructure outcome at the result boundary for a real bound Run.
-    proxy.injectInfrastructure();
-    const environmentErrorId=await deploy(3,mr.head_sha);
-    await eventually(async()=>{ await cli('--once'); return proxy.injectedReceipt(); });
-    const environmentError=proxy.injectedReceipt();
-    assert.equal(environmentError.receipt.outcome,'needs_review');
-    assert.equal(environmentError.receipt.reports[0].outcome,'needs_review');
+    // The proof and document match, but an actual browser receives a model response from an older revision.
+    proxy.resume();
+    const mixed=await finish(await deploy(3,mr.head_sha,[mr.head_sha],base));
+    const mixedRun=await callWhippet('/api/retests/workspaces/'+workspace+'/runs/'+mixed.result.run_id,process.env.WHIPPET_BRIDGE);
+    assert.equal(mixedRun.status,200);
+    assert.equal(mixedRun.data.outcome,'unverified',JSON.stringify(mixedRun.data));
+    assert.deepEqual(mixed.rows.map(row=>row.outcome),['needs_review']);
     assert.notEqual(await reportStatus(first),'completed');
-    evidence.environmentError={deployment:environmentErrorId,receipt:environmentError};
+    evidence.mixedRelease={run:mixed.result.run_id,outcome:mixedRun.data.outcome,reports:mixed.rows};
     proxy.hold();
     const staleId=await deploy(4,mr.head_sha);
     await eventually(async()=>{

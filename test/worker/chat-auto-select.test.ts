@@ -1,8 +1,8 @@
 import { env } from 'cloudflare:workers';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { autoSelectTarget, EMPTY_THREAD_TEXT, visibleItems } from '../../src/shared/chat-tabs';
 import type { Report } from '../../src/worker/lib/models';
-import { Browser, seedProject, seedReport, type SeededProject } from './helpers';
+import { Browser, reload, seedProject, seedReport, type SeededProject } from './helpers';
 
 /**
  * 右下角對話面板打開就自動選第一張（對應 Laravel 版 chat-tabs.test.js 與 FeedbackConversationPanelTest）。
@@ -10,12 +10,18 @@ import { Browser, seedProject, seedReport, type SeededProject } from './helpers'
  */
 const JSON_HEADERS = { accept: 'application/json' };
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
+const READ_AT = '2020-01-01T00:00:00.000Z';
+const MESSAGE_AT = '2020-01-01T00:01:00.000Z';
+const OPENED_AT = '2020-01-01T00:02:00.000Z';
 
-async function message(report: Report, author: 'reporter' | 'owner', minutesAgo: number): Promise<void> {
-    const at = new Date(Date.now() - minutesAgo * 60_000).toISOString();
-    await env.DB.prepare('INSERT INTO messages (report_id, author_type, author_name, body, created_at, updated_at) VALUES (?, ?, NULL, ?, ?, ?)').bind(report.id, author, '新留言', at, at).run();
-    await tick();
+async function reportWithUnreadMessage(seeded: SeededProject, title: string, author: 'reporter' | 'owner'): Promise<Report> {
+    const { report } = await seedReport(seeded.project, { title, at: Date.parse(READ_AT) });
+    await env.DB.batch([
+        env.DB.prepare('UPDATE reports SET client_last_read_at = ?, owner_last_read_at = ? WHERE id = ?').bind(READ_AT, READ_AT, report.id),
+        env.DB.prepare('INSERT INTO messages (report_id, author_type, author_name, body, created_at, updated_at) VALUES (?, ?, NULL, ?, ?, ?)')
+            .bind(report.id, author, '新留言', MESSAGE_AT, MESSAGE_AT),
+    ]);
+    return report;
 }
 
 async function unreadOf(browser: Browser, seeded: SeededProject, report: Report): Promise<number | undefined> {
@@ -50,30 +56,38 @@ describe('對話面板自動選第一張的純邏輯', () => {
 });
 
 describe('對話面板偷看（peek）', () => {
+    beforeEach(() => {
+        vi.spyOn(Date, 'now').mockReturnValue(Date.parse(OPENED_AT));
+    });
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
     it('client peek keeps the thread unread; a normal open marks it read', async () => {
         const seeded = await seedProject();
-        const { report } = await seedReport(seeded.project, { title: '有新回覆' });
-        await message(report, 'owner', 0);
+        const report = await reportWithUnreadMessage(seeded, '有新回覆', 'owner');
         const client = await new Browser().asClient(seeded);
         expect(await unreadOf(client, seeded, report)).toBe(1);
 
         const peek = await client.get(`/p/${seeded.project.slug}/conversations/${report.public_id}?peek=1`, JSON_HEADERS);
         expect(peek.status).toBe(200);
+        expect((await reload('reports', report)).client_last_read_at).toBe(READ_AT);
         expect(await unreadOf(client, seeded, report)).toBe(1);
 
         const open = await client.get(`/p/${seeded.project.slug}/conversations/${report.public_id}`, JSON_HEADERS);
         expect(open.status).toBe(200);
+        expect((await reload('reports', report)).client_last_read_at).toBe(OPENED_AT);
         expect(await unreadOf(client, seeded, report)).toBe(0);
     });
 
     it('team side is marked read even with peek', async () => {
         const seeded = await seedProject();
-        const { report } = await seedReport(seeded.project, { title: '老師新留言' });
-        await message(report, 'reporter', 0);
+        const report = await reportWithUnreadMessage(seeded, '老師新留言', 'reporter');
         const owner = await new Browser().asOwner(seeded);
         expect(await unreadOf(owner, seeded, report)).toBe(1);
 
         expect((await owner.get(`/p/${seeded.project.slug}/conversations/${report.public_id}?peek=1`, JSON_HEADERS)).status).toBe(200);
+        expect((await reload('reports', report)).owner_last_read_at).toBe(OPENED_AT);
         expect(await unreadOf(owner, seeded, report)).toBe(0);
     });
 

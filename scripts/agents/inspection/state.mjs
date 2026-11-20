@@ -8,6 +8,12 @@ export function digest(values) {
     return createHash('sha256').update(JSON.stringify(values)).digest('hex');
 }
 
+function eventIdentity(event) {
+    if (!event || typeof event !== 'object') return null;
+    const { scope_revision: revision, ...observation } = event;
+    return typeof revision === 'string' ? observation : null;
+}
+
 export async function createInspectionStore(path) {
     const directory = resolve(path);
     try {
@@ -33,7 +39,7 @@ export async function createInspectionStore(path) {
         }
     }
 
-    async function write(file, record, immutable = false) {
+    async function write(file, record, identity) {
         const temporary = join(directory, '.' + randomUUID() + '.tmp');
         const contents = JSON.stringify(record);
         try {
@@ -44,12 +50,14 @@ export async function createInspectionStore(path) {
             } finally {
                 await handle.close();
             }
-            if (immutable) {
+            if (identity) {
                 try {
                     await link(temporary, file);
                 } catch (error) {
                     if (error.code !== 'EEXIST') throw error;
-                    if (JSON.stringify(await read(file)) !== contents) throw new InspectionError('inspection_state_conflict');
+                    if (JSON.stringify(identity(await read(file))) !== JSON.stringify(identity(record))) {
+                        throw new InspectionError('inspection_state_conflict');
+                    }
                 }
             } else {
                 await rename(temporary, file);
@@ -74,8 +82,9 @@ export async function createInspectionStore(path) {
         run(stream, runId) {
             const key = join(directory, digest([stream, runId]));
             return {
-                saveEvent: event => write(key + '.event.json', event, true),
-                saveReceipt: receipt => write(key + '.receipt.json', receipt, true),
+                // A scope revision authorizes the request. The source Run and event payload remain immutable.
+                saveEvent: event => write(key + '.event.json', event, eventIdentity),
+                saveReceipt: receipt => write(key + '.receipt.json', receipt, value => value),
                 saveResult: result => write(key + '.result.json', result),
             };
         },

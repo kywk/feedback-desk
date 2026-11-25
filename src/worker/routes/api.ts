@@ -79,7 +79,7 @@ export async function tokenOwner(c: AppContext): Promise<{ owner: TokenOwner; to
 export const requireToken: MiddlewareHandler<AppEnv> = async (c, next) => {
     const result = await tokenOwner(c);
     if (!result) {
-        return c.json({ error: 'unauthorized', message: '需要有效的 API token（npx --allow-git=all github:aixwangtw/feedback-desk login）。' }, 401);
+        return c.json({ error: 'unauthorized', message: '需要有效的 API token（airedale login）。' }, 401);
     }
     if (result.owner.kind === 'developer') {
         c.set('apiDeveloper', result.owner.developer);
@@ -137,7 +137,7 @@ api.post('/device/code', async (c) => {
         return c.json({ error: 'slow_down', message: '申請次數過多，請稍後再試。' }, 429, { 'Retry-After': String(retryAfter) });
     }
     const input = await body<{ client_name?: string; expires_in_days?: number | null }>(c);
-    const clientName = (input.client_name ?? 'feedback-desk CLI').toString().slice(0, 100);
+    const clientName = (input.client_name ?? 'Airedale CLI').toString().slice(0, 100);
     const tokenDays = input.expires_in_days === undefined || input.expires_in_days === null ? null : Number(input.expires_in_days);
     if (tokenDays !== null && (!Number.isInteger(tokenDays) || tokenDays < 1 || tokenDays > team.MAX_TOKEN_DAYS)) {
         return c.json({ error: 'invalid_expiry', message: `有效天數必須是 1 到 ${team.MAX_TOKEN_DAYS} 的整數。` }, 422);

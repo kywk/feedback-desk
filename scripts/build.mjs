@@ -3,7 +3,7 @@
  * Builds everything the npm package ships:
  *   dist/public/      static files served by Workers Static Assets (CSS, JS)
  *   dist/worker/      the Worker bundle
- *   dist/cli.js       the feedback-desk command
+ *   dist/cli.js       the airedale command
  */
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';

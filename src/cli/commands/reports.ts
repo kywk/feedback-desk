@@ -142,12 +142,12 @@ function safeName(name: string): string {
     return basename(name).replace(/[^\w.\-一-鿿]+/g, '_').slice(0, 80) || 'image';
 }
 
-/** ~/.cache/feedback-desk (XDG_CACHE_HOME; %LOCALAPPDATA% on Windows): private to this user, unlike /tmp. */
+/** ~/.cache/airedale (XDG_CACHE_HOME; %LOCALAPPDATA% on Windows): private to this user, unlike /tmp. */
 export function cacheDir(rt: Runtime): string {
     if (rt.platform === 'win32' && rt.env.LOCALAPPDATA) {
-        return join(rt.env.LOCALAPPDATA, 'feedback-desk', 'cache');
+        return join(rt.env.LOCALAPPDATA, 'airedale', 'cache');
     }
-    return join(rt.env.XDG_CACHE_HOME || join(rt.home, '.cache'), 'feedback-desk');
+    return join(rt.env.XDG_CACHE_HOME || join(rt.home, '.cache'), 'airedale');
 }
 
 /** Creates each level with mode 700 so other users on the machine cannot list or read attachments. */

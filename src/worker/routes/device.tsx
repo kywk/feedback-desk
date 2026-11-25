@@ -10,7 +10,7 @@ import { field, readForm, viewContext, type AppContext, type AppEnv } from './co
 import { checkLoginRateLimit, loginLimits } from './web';
 
 /**
- * Browser side of `feedback-desk login`. The code is never taken from the URL: the person types
+ * Browser side of `airedale login`. The code is never taken from the URL: the person types
  * what their own terminal shows, so a link sent by someone else cannot pre-fill an approval.
  */
 export const device = new Hono<AppEnv>();

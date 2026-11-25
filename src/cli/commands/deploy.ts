@@ -65,7 +65,7 @@ export async function init(rt: Runtime, argv: string[]): Promise<number> {
         rt.out(`下一步：${CLI_COMMAND} deploy`);
         return 0;
     }
-    const name = str(args, 'name') ?? 'feedback-desk';
+    const name = str(args, 'name') ?? CLI_COMMAND;
     if (!WORKER_NAME.test(name)) {
         throw new CliError('--name 只能用小寫英文、數字與連字號，2 到 54 字，開頭結尾不可是連字號。');
     }
@@ -114,7 +114,7 @@ export async function deploy(rt: Runtime, argv: string[]): Promise<number> {
     };
     if (secret !== 'present') {
         // The secret goes to Cloudflare once and is never kept in the deploy folder.
-        secretsDir = mkdtempSync(join(rt.tmp, 'feedback-desk-'));
+        secretsDir = mkdtempSync(join(rt.tmp, 'airedale-'));
         const secretsFile = join(secretsDir, 'secrets.json');
         writeFileSync(secretsFile, JSON.stringify({ APP_SECRET: randomBytes(32).toString('base64url') }), { mode: 0o600 });
         deployArgs.push('--secrets-file', secretsFile);
@@ -318,7 +318,7 @@ function clientRevokeSql(id: number): string[] {
 export async function accountCommand(rt: Runtime, argv: string[]): Promise<number> {
     const [action, ...rest] = argv;
     if (action !== 'recover') {
-        throw new CliError('用法：feedback-desk account recover <帳號> [--project slug]');
+        throw new CliError('用法：airedale account recover <帳號> [--project slug]');
     }
     const args = parse(rest, { dir: { type: 'string' }, project: { type: 'string' } });
     const username = requirePositional(args, 0, '<帳號>').trim();

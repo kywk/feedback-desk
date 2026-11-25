@@ -25,7 +25,7 @@ describe('device authorization for the CLI', () => {
         const browser = new Browser();
         const page = await (await browser.get(`/device?code=${code.user_code}`)).text();
         expect(page).toContain('開發團隊個人帳號或客戶帳號都可以');
-        expect(page).toContain('如果你剛才沒有在自己的終端機執行 feedback-desk login，請不要授權');
+        expect(page).toContain('如果你剛才沒有在自己的終端機執行 airedale login，請不要授權');
         expect(page).not.toContain(code.user_code);
         expect((await browser.post('/device/login', { username: developer.username, password: 'wrong' })).status).toBe(422);
         const login = await browser.post('/device/login', { username: developer.username, password });

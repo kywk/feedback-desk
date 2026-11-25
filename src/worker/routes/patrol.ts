@@ -10,7 +10,7 @@ import { paths } from './paths';
 
 /**
  * REST API for the scheduled patrol (a cloud routine): `Authorization: Bearer fdp_...` from
- * `feedback-desk patrol-token issue`. It acts as the token's team account and can only list
+ * `airedale patrol-token issue`. It acts as the token's team account and can only list
  * projects, list reports that need attention, read a report, leave a message, write a draft message
  * (待審留言, team-only until a person sends it), ask the client to confirm completion (a confirmation message with a 通過 button), write the adjustment note (deprecated, still accepted with a warning) and set needs_input. It cannot complete or delete reports. Writes are logged in patrol_logs.
  */

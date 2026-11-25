@@ -184,7 +184,7 @@ export interface DeviceRequest {
 
 const DEVICE_WARNING = (
     <div role="alert" class="mt-5 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold leading-6 text-amber-900" data-device-warning>
-        如果你剛才沒有在自己的終端機執行 feedback-desk login，請不要授權。授權後，對方可以用你的身分做你在網站上能做的事：團隊帳號是所有專案的回報單、調整重點、狀態與帳號管理；客戶帳號是你自己專案的看單、開單與留言。
+        如果你剛才沒有在自己的終端機執行 airedale login，請不要授權。授權後，對方可以用你的身分做你在網站上能做的事：團隊帳號是所有專案的回報單、調整重點、狀態與帳號管理；客戶帳號是你自己專案的看單、開單與留言。
     </div>
 );
 
@@ -201,7 +201,7 @@ export const DevicePage: FC<{
     return (
         <Layout v={v} title={`授權命令列工具｜${v.cfg.home.title}`}>
             <section class="mx-auto max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8" data-device-page>
-                <p class="text-sm font-semibold text-teal-700">Feedback Desk CLI</p>
+                <p class="text-sm font-semibold text-teal-700">Airedale CLI</p>
                 <h1 class="mt-1 text-2xl font-bold tracking-tight text-slate-950">授權命令列工具</h1>
                 {state === 'approved' ? (
                     <p class="mt-4 text-sm leading-6 text-slate-600" data-device-approved>已授權。回到終端機就能繼續，這個分頁可以關閉。</p>

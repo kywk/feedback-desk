@@ -1,6 +1,6 @@
 # PM 交接
 
-**W4 部署後重測已完成，W1–W4 均已驗收。** Feedback Desk 整合提交為 `fe7c283`，Whippet 為 `d3032f7`，均在各自本機 main。真實 GitLab MR !6／!8 部署至隔離站後，由瀏覽器重測並回寫工單；混版與晚到結果均未誤結案。最終 Worker 377/377、CLI 134/134，W1–W3 回歸通過。現行計畫到 W4 為止。[實際指令、MR、Run 與回歸證據](../devlog/w4.md) · [重跑方式](../../../test/w4/README.md)
+**W4 部署後重測已完成，W1–W4 均已驗收。** Airedale 整合提交為 `fe7c283`，Whippet 為 `d3032f7`，均在各自本機 main。真實 GitLab MR !6／!8 部署至隔離站後，由瀏覽器重測並回寫工單；混版與晚到結果均未誤結案。最終 Worker 377/377、CLI 134/134，W1–W3 回歸通過。現行計畫到 W4 為止。[實際指令、MR、Run 與回歸證據](../devlog/w4.md) · [重跑方式](../../../test/w4/README.md)
 
 W1 已在 `327dc18` 完成整波驗收並整合至本機 `main`。W1-03 `c051f9a` 接上內網 Worker，W1-04 `aa2e523`、`55ddef9` 補齊實際程序重啟、自然租約到期、退避與人工接手的證據。[W1 驗證紀錄](../devlog/w1.md)
 
@@ -10,4 +10,4 @@ W2-01～04 已整合至本機 `main`。QA 在產品版本 `94dc54b` 完成型別
 
 **W2-04 已在本機隔離 GitLab 建立真實 MR。** 產品提交 `de632ed` 使用 GitLab CE 19.6.1 的私有專案 `root/w2-todomvc`（ID 1），以本機 TodoMVC 的 main 為基底。開發驗收查回 [MR !1](https://localhost:18443/root/w2-todomvc/-/merge_requests/1)，並核對相同工單重送仍對應同一張 MR。[設定、重跑方式與證據](../devlog/w2.md#本機-gitlab-ce-實機驗收)
 
-**W3 已完成。** Feedback Desk 產品 `42db763`、實機驗收 `8e3266e`，Whippet 產品 `bdb2724`、最終測試修正 `8843131`，均已整合至本機 main。兩筆真實 QA 巡檢失敗連到同一張團隊單，stage 分單。成功、Runner 中斷與草稿驗證失敗皆未觸發建單。QA 驗過發布權限、重送、跨服務可用性，並重開 D1 後從 Run 頁面點回原單。[完整指令、Run 與收據證據](../devlog/w3.md#最終驗收證據) · [本機啟動與存取](../devlog/w3.md#本機驗收環境)
+**W3 已完成。** Airedale 產品 `42db763`、實機驗收 `8e3266e`，Whippet 產品 `bdb2724`、最終測試修正 `8843131`，均已整合至本機 main。兩筆真實 QA 巡檢失敗連到同一張團隊單，stage 分單。成功、Runner 中斷與草稿驗證失敗皆未觸發建單。QA 驗過發布權限、重送、跨服務可用性，並重開 D1 後從 Run 頁面點回原單。[完整指令、Run 與收據證據](../devlog/w3.md#最終驗收證據) · [本機啟動與存取](../devlog/w3.md#本機驗收環境)

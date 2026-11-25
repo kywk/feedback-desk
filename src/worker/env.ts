@@ -86,7 +86,7 @@ export function config(env: Env): FeedbackConfig {
         portalTitle: str(env, 'FEEDBACK_PORTAL_TITLE', '問題回報追蹤'),
         home: {
             title: str(env, 'FEEDBACK_HOME_TITLE', '問題回報'),
-            eyebrow: str(env, 'FEEDBACK_HOME_EYEBROW', 'Feedback Desk'),
+            eyebrow: str(env, 'FEEDBACK_HOME_EYEBROW', 'Airedale'),
             heading: str(env, 'FEEDBACK_HOME_HEADING', '問題回報'),
             body: str(env, 'FEEDBACK_HOME_BODY', `請開啟${ownerLabel}給你的專案連結，登入後就能回報問題、查看處理進度。`),
         },

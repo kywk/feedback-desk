@@ -1,6 +1,6 @@
 # 內網收單 Worker
 
-在可連到 Feedback Desk 與核准來源的內網主機執行，使用 Node.js 20 以上。
+在可連到 Airedale 與核准來源的內網主機執行，使用 Node.js 20 以上。
 
 ```sh
 node scripts/agents/consumer/cli.mjs
@@ -11,7 +11,7 @@ node scripts/agents/consumer/cli.mjs --once
 
 | 環境變數 | 用途 |
 | --- | --- |
-| `FEEDBACK_DESK_URL` | Feedback Desk HTTPS origin。本機測試可用 HTTP loopback |
+| `FEEDBACK_DESK_URL` | Airedale HTTPS origin。本機測試可用 HTTP loopback |
 | `FEEDBACK_DESK_AUTOMATION_TOKEN` | 綁定專案與環境的專用 `fda_` 憑證，從部署環境注入 |
 | `FEEDBACK_DESK_PROJECT_SLUG` | D1 登錄的專案 slug |
 | `FEEDBACK_DESK_ENVIRONMENT` | D1 登錄的環境 |

@@ -326,7 +326,7 @@ export async function applyAutomationDecision(env: Env, scope: AutomationScope, 
                 stage = 'waiting_review';
             }
             const at = nowIso();
-            const actor = { name: config(env).sharedOwnerName, developerId: null, clientAccountId: null, agent: 'Feedback Desk' };
+            const actor = { name: config(env).sharedOwnerName, developerId: null, clientAccountId: null, agent: 'Airedale' };
             const effects: D1PreparedStatement[] = [
                 assertion(db, `EXISTS (SELECT 1 FROM automation_work w WHERE ${ACTIVE_LEASE} AND w.input_revision = ?10
                     AND w.next_action = 'analyze' AND w.proposal_revision IS ?11)

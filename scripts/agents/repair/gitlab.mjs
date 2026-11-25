@@ -65,6 +65,7 @@ export function createGitLab({ config, token, fetchImpl, signal }) {
     }
 
     function marker(operationId) {
+        // Existing merge requests carry this marker and may still need to be reconciled.
         return 'Feedback Desk operation: ' + operationId;
     }
 
@@ -104,7 +105,7 @@ export function createGitLab({ config, token, fetchImpl, signal }) {
         async create(operationId, intent) {
             await request('/merge_requests', {
                 source_branch: intent.source_branch, target_branch: intent.target_branch,
-                title: 'Feedback Desk repair ' + operationId.slice(-12), description: marker(operationId),
+                title: 'Airedale repair ' + operationId.slice(-12), description: marker(operationId),
             });
         },
     };

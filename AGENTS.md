@@ -1,5 +1,52 @@
 # 回饋系統專案規則
 
+## AI 自動接單與 Whippet 整合開發
+
+接手開發先讀 [目前交接](docs/tracking/handoff/current.md)。需求與路由規則見 [功能規格](docs/requirements/automation.md)，分批派工見 [Wave 計畫](docs/tracking/waves.md)。以下開發分工適用於建置系統；既有 OpenCode PM／RD 設定描述執行時的工單角色。
+
+| 開發細則 | 讀取時機 |
+| --- | --- |
+| [tech-stack.md](.agent-rules/tech-stack.md) | 技術與執行環境 |
+| [project-structure.md](.agent-rules/project-structure.md) | 文件與實作位置 |
+| [tracking.md](.agent-rules/tracking.md) | 任務派工與交接 |
+| [verification.md](.agent-rules/verification.md) | 單項與 Wave 驗證 |
+
+## 部署架構（AI 處理機制）
+
+- Airedale 跑在 **DMZ 環境**。本機 demo 為 `http://127.0.0.1:8787`。Docker 命名與既有資料卷升級方式見 [README](README.md#docker-自行託管企業內網不用-cloudflare-帳號)。
+- **PM-Agent / RD-Agent** 跑在本機或其他可訪問 LLM 的環境，不在 DMZ。
+  - 團隊帳號：`pm-agent`（PM-Agent）、`rd-agent`（RD-Agent），工作 token 已建立於資料庫。
+  - 工具：opencode；模型 `opencode-go/muse-spark-1.3-contributor#xhigh`。
+  - 操作入口：Airedale CLI（`node dist/cli.js`，環境變數 `FEEDBACK_DESK_URL` / `FEEDBACK_DESK_TOKEN` / `FEEDBACK_DESK_AGENT`）。
+- **PM-Agent** 定期向 Airedale 取單（`reports recruitment-flow --status new --creator client`），輪詢腳本 `scripts/agents/pm_poll.sh`；也可改用 websocket 連線即時收單。
+- **PM 收單後** 透過 subagent（opencode subagent，agent 型別 general）或 agent protocol 喚起 **RD-Agent** 分析程式碼並回報。
+- 分工：
+  - PM：只讀單、認領、派發、寫交接紀錄，不改程式。
+  - RD：讀 `~/nanshan/{agent,staff,recruitment}` 程式碼與 `~/nanshan/scripts/localenv` 本機說明，分析後用 ELI5 白話回覆客戶。
+- 派發程式庫對應：增員服務 `~/nanshan/recruitment`（增員流程）、`~/nanshan/agent`、`~/nanshan/staff`。
+
+## 如何用任何 AI 工具接入擔任 PM/RD
+
+Airedale 對 AI 工具開放兩種接入方式，任何支援 MCP 或可跑 shell 的 agent／工具都能擔任 PM 或 RD：
+
+- **MCP（Streamable HTTP）**：端點 `http://127.0.0.1:8787/mcp`，Authorization 用 `Bearer <token>`。適合有原生 MCP 支援的工具（如 opencode、Claude Code）。
+- **CLI**：`node dist/cli.js`，用環境變數 `FEEDBACK_DESK_URL` / `FEEDBACK_DESK_TOKEN` / `FEEDBACK_DESK_AGENT` 連線。適合不支援 MCP、只能跑 shell 的工具。
+
+接入步驟（PM 與 RD 相同，只差角色提示詞）：
+
+1. **建團隊帳號**：`node dist/cli.js developer create pm-agent`（或 `rd-agent`）。
+2. **發 token**：MCP 用 `node dist/cli.js mcp token --agent pm-agent`；CLI 用 `node dist/cli.js token create --agent pm-agent`。
+3. **設定環境變數**：MCP 把 token 放到 `FEEDBACK_DESK_MCP_TOKEN`；CLI 放到 `FEEDBACK_DESK_TOKEN`（另設 `FEEDBACK_DESK_URL`、`FEEDBACK_DESK_AGENT`）。
+4. **貼角色提示詞**：PM 提示詞「只讀單、認領、派發 RD、寫交接紀錄，不改程式」；RD 提示詞「讀 `~/nanshan/{agent,staff,recruitment}` 與 `~/nanshan/scripts/localenv`，用 ELI5 白話回覆客戶」。
+
+本專案已備妥的 OpenCode 版本：
+
+- Agent 定義：`.opencode/agents/pm.md`（primary agent，id `pm`）、`.opencode/agents/rd.md`（subagent）。
+- 輪詢器：`scripts/agents/pm_poll.sh`（每輪呼叫 `opencode run --agent pm --session ses_pmagent` 喚起 PM 收單）。
+- MCP server 設定：`opencode.json`（server 名 `airedale`，token 走環境變數 `FEEDBACK_DESK_MCP_TOKEN`）。
+
+> **注意**：token 是祕密，正式部署一律用環境變數注入，不要寫死或進版控。
+
 ## 介面
 
 - 按鈕文字一律不換行。全站共用樣式（`app.css` 的 base 層）已對 `button`、`summary`、`[role=tab]`、`.inline-flex` 加上 `white-space: nowrap`；

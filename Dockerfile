@@ -1,13 +1,14 @@
-# Feedback Desk 自行託管（企業內網）Dockerfile
+# Airedale 自行託管（企業內網）Dockerfile
 #
-# 建置：docker build -t feedback-desk .
+# 建置：docker build -t airedale .
 #
 # 最小啟動（本機驗證，資料放具名卷）：
-#   docker run -d --name feedback-desk -p 8787:8787 \
-#     -v feedback-desk-data:/app/.wrangler \
+#   docker run -d --name airedale -p 8787:8787 \
+#     -v airedale-data:/app/.wrangler \
 #     -e BOOTSTRAP_ADMIN=alex \
-#     feedback-desk
-#   # 首次 log 會印出只顯示一次的密碼，存好後到 /owner/demo/login 登入。
+#     airedale
+#   # 首次 log 會印出只顯示一次的密碼，存好後到 /owner/login 登入。
+#   # 從舊版升級時，掛載原本的資料卷，例如 feedback-desk-data。
 #
 # 企業內網建議（務必明確設定，見 README「Docker 自行託管」）：
 #   -e APP_SECRET=<至少 32 字元的亂數，換了全員重登入> \

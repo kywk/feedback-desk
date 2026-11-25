@@ -6,7 +6,7 @@
 
 這個模式適用於先在本機審閱修正。準備由 Worker 管理的 clone 和獨立的裸庫，將 clone 的 `origin` 與 scope 設定內的 `remote` 設為同一個實際絕對路徑的 `file://` URL。例如 `file:///srv/feedback-worker/test-app.git`。工作庫和裸庫應使用一般 Git 目錄及無轉指的物件與 ref 儲存。請把受管 `base_branch` 與 `base_commit` 放進兩個庫，並限制檔案系統存取權。
 
-在對應的 scope repo 下設定 `repair.mode: "local"`，保留後述的 `allowed_paths`、`branch_prefix`、`recovery_directory`、`checks` 和 `test_image`，省略 `gitlab`。DMZ 登記相同版本與 repo 的 `delivery_mode: "local"`、基底、分支前綴及檢查 ID。本機模式只需既有的 Feedback Desk consumer 憑證。Worker 以本機 Git 物件與 refs 儲存將 commit 寫入核准的裸庫，保留基底分支與來源 clone，並回報 `local_branch_ready` 給團隊審查。
+在對應的 scope repo 下設定 `repair.mode: "local"`，保留後述的 `allowed_paths`、`branch_prefix`、`recovery_directory`、`checks` 和 `test_image`，省略 `gitlab`。DMZ 登記相同版本與 repo 的 `delivery_mode: "local"`、基底、分支前綴及檢查 ID。本機模式只需既有的 Airedale consumer 憑證。Worker 以本機 Git 物件與 refs 儲存將 commit 寫入核准的裸庫，保留基底分支與來源 clone，並回報 `local_branch_ready` 給團隊審查。
 
 在 Worker 主機以 `git --git-dir <裸庫絕對路徑> show <head_sha>` 查閱內容；確認基底分支、來源分支與 commit 後，再依團隊既有流程處理。若收據回應遺失，consumer 會重送相同的操作並核對裸庫內的分支 HEAD。
 
@@ -59,7 +59,7 @@
 
 - 工作紀錄的 `repair` 包含階段、`recovery_id`、來源分支，以及當時可取得的檢查 ID 或 HEAD SHA。開啟 `<recovery_directory>/<recovery_id>/repair.json` 可比對工單及方案。以 `git -C <recovery_directory>/<recovery_id>/worktree diff --cached` 檢查尚未通過的內容，或以同一路徑執行 `git log -1` 查看已通過檢查的本機 commit。保留原受管 clone，以便隔離工作樹仍可讀取基底物件。
 - 若 push 回應遺失，續辦會比對固定工作分支的實際 HEAD。其他 HEAD、已不存在的已確認分支，或在建單前變更的基底分支都會停止後續寫入。
-- 若 GitLab 建 MR 的回應遺失，續辦會查同一來源與目標分支，再讀 MR 詳情，核對操作標記、project ID、MR ID、IID、URL 與 HEAD。既有 MR 可確認就回寫。同一意圖在後續租約仍查無 MR 時會留下 `repair_mr_result_uncertain` 並交由團隊對帳。請保留 MR 說明中的 `Feedback Desk operation:` 標記行。
+- 若 GitLab 建 MR 的回應遺失，續辦會查同一來源與目標分支，再讀 MR 詳情，核對操作標記、project ID、MR ID、IID、URL 與 HEAD。既有 MR 可確認就回寫。同一意圖在後續租約仍查無 MR 時會留下 `repair_mr_result_uncertain` 並交由團隊對帳。請保留 MR 說明中的 `Airedale operation:` 標記行。
 - 成功回寫後清理當次隔離工作樹。曾失敗的嘗試會保留在私有磁碟，團隊確認處置後可清理對應的 recovery 目錄。
 
 ## 開發驗證

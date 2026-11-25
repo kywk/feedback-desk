@@ -24,7 +24,7 @@ function containerOptions(name, image, argv) {
         '--ipc=none', '--cap-drop=ALL', '--security-opt=no-new-privileges',
         '--user=65534:65534', '--pids-limit=128', '--memory=512m', '--cpus=1',
         '--workdir=/tmp', '--env', 'HOME=/tmp', '--entrypoint=/bin/sh', image,
-        '-eu', '-c', SANDBOX_SCRIPT, 'feedback-desk-check', ...argv,
+        '-eu', '-c', SANDBOX_SCRIPT, 'airedale-check', ...argv,
     ];
 }
 

@@ -16,15 +16,17 @@ export interface UserConfig {
     mcp?: Record<string, { claude?: number; codex?: number }>;
 }
 
-/** ~/.config/feedback-desk (XDG_CONFIG_HOME respected; %APPDATA% on Windows). */
+/** Uses the Airedale directory for new installs and reuses an existing Feedback Desk directory. */
 export function configDir(rt: Runtime): string {
     if (rt.env.FEEDBACK_DESK_CONFIG_DIR) {
         return rt.env.FEEDBACK_DESK_CONFIG_DIR;
     }
-    if (rt.platform === 'win32' && rt.env.APPDATA) {
-        return join(rt.env.APPDATA, 'feedback-desk');
-    }
-    return join(rt.env.XDG_CONFIG_HOME || join(rt.home, '.config'), 'feedback-desk');
+    const root = rt.platform === 'win32' && rt.env.APPDATA
+        ? rt.env.APPDATA
+        : rt.env.XDG_CONFIG_HOME || join(rt.home, '.config');
+    const current = join(root, 'airedale');
+    const legacy = join(root, 'feedback-desk');
+    return !existsSync(current) && existsSync(legacy) ? legacy : current;
 }
 
 export function configPath(rt: Runtime): string {

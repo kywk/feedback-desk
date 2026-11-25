@@ -239,7 +239,7 @@ function resultReportEffects(env: Env, data: RetestObservation, generation: numb
         (retest_request_id, attempt_generation, report_public_id, outcome, reason) VALUES (?,?,?,?,?)`)
         .bind(data.retest_request_id, generation, result.report_public_id, result.outcome, result.reason ?? null);
     if (result.outcome === 'ignored_stale') return [update];
-    const actor = { name: 'Feedback Desk', developerId: null, clientAccountId: null, agent: 'Feedback Desk' };
+    const actor = { name: 'Airedale', developerId: null, clientAccountId: null, agent: 'Airedale' };
     const guard = assertion(db, `EXISTS (SELECT 1 FROM (${REPORTS}) WHERE linked_public_id=?3 AND applicable=1
         AND failed_after_start=0 AND auto_reply=?4 AND auto_close=?5 AND pure_inspection IS ?6)`,
         [data.retest_request_id, data.started_at, result.report_public_id, report.auto_reply, report.auto_close, report.pure_inspection]);

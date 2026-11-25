@@ -1,5 +1,5 @@
 #!/bin/sh
-# docker-entrypoint.sh — self-hosted Feedback Desk（企業內網）啟動流程：
+# docker-entrypoint.sh — Airedale 自行託管啟動流程：
 #   1. APP_SECRET：沒給就產生一組存進資料卷（重啟沿用；換了會登出所有人）。
 #   2. 本地 D1 跑 migrations（非互動環境自動跳過確認）。
 #   3. BOOTSTRAP_ADMIN 有設且 developers 還是空的 → 建第一個團隊帳號。

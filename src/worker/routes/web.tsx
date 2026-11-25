@@ -1651,7 +1651,7 @@ web.on(['POST', 'PATCH'], '/p/:slug/reports/:publicId/status', async (c) => {
     const status = field(form, 'status');
     const isOwner = await access.isOwner(project);
     // 網頁上不能手動改狀態：留言時自動切換（等工程師／等客戶），只有客戶能按「完成」結單。
-    // 排程 API 與 CLI（feedback-desk status）照舊可以改。
+    // 排程 API 與 CLI（airedale status）照舊可以改。
     const refused = `狀態會依留言自動切換；網頁上只有${config(c.env).labels.client}能按「完成」結單。`;
     if (isOwner) {
         abort(403, refused);

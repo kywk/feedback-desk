@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { ApiClient } from '../api';
@@ -58,7 +58,7 @@ export async function login(rt: Runtime, argv: string[]): Promise<number> {
     }
     const url = normalizeSiteUrl(rawUrl);
     const client = new ApiClient(rt, url, null);
-    const clientName = str(args, 'name') ?? `feedback-desk CLI（${hostname()}）`;
+    const clientName = str(args, 'name') ?? `Airedale CLI（${hostname()}）`;
     const { data: code } = await client.request<DeviceCode>('POST', '/device/code', { client_name: clientName, expires_in_days: expires }, { auth: false });
     rt.out(`請在瀏覽器開啟：${code.verification_uri}`);
     rt.out(`用你的帳號（團隊或客戶帳號）登入後，輸入這個授權碼：${code.user_code}`);
@@ -160,7 +160,7 @@ export async function token(rt: Runtime, argv: string[]): Promise<number> {
         rt.out(`已撤銷 token #${id}。`);
         return 0;
     }
-    throw new CliError('用法：feedback-desk token create|list|revoke');
+    throw new CliError('用法：airedale token create|list|revoke');
 }
 
 /**
@@ -203,12 +203,12 @@ export async function patrolToken(rt: Runtime, argv: string[]): Promise<number> 
         rt.out(`已撤銷排程 token #${id}。`);
         return 0;
     }
-    throw new CliError('用法：feedback-desk patrol-token issue [--developer 帳號] [--name 用途]|list|revoke --id 編號');
+    throw new CliError('用法：airedale patrol-token issue [--developer 帳號] [--name 用途]|list|revoke --id 編號');
 }
 
 // ---------------------------------------------------------------- MCP client setup
 
-export const MCP_NAME = 'feedback-desk';
+export const MCP_NAME = 'airedale';
 
 type Tool = 'claude' | 'codex';
 
@@ -232,7 +232,7 @@ export function shellQuote(value: string): string {
  * command line (visible in `ps`) or in a shell environment variable (inherited by every program).
  */
 const HEADER_HELPER = `#!/usr/bin/env node
-// Prints the Authorization header for the feedback-desk MCP server (written by feedback-desk mcp install).
+// Prints the Authorization header for the Airedale MCP server.
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const tool = process.argv[2] === 'codex' ? 'codex' : 'claude';
@@ -244,9 +244,13 @@ function mcpDir(rt: Runtime): string {
     return join(configDir(rt), 'mcp');
 }
 
+function mcpInstallDir(rt: Runtime): string {
+    return join(mcpDir(rt), MCP_NAME);
+}
+
 /** Writes the helper and the token file for one tool; returns the command the tool should run. */
 function writeHelper(rt: Runtime, tool: Tool, token: string): string {
-    const dir = mcpDir(rt);
+    const dir = mcpInstallDir(rt);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     try {
         chmodSync(dir, 0o700);
@@ -260,12 +264,12 @@ function writeHelper(rt: Runtime, tool: Tool, token: string): string {
 }
 
 /**
- * Replaces the [mcp_servers.feedback-desk] table and every sub-table of it
- * ([mcp_servers.feedback-desk.env], [[mcp_servers.feedback-desk.x]], quoted forms), keeping the
+ * Replaces the [mcp_servers.airedale] table and every sub-table of it
+ * ([mcp_servers.airedale.env], [[mcp_servers.airedale.x]], quoted forms), keeping the
  * rest of config.toml as it is.
  */
 export function upsertCodexServer(existing: string, url: string, helperCommand: string): string {
-    const ours = /^\s*\[\[?\s*mcp_servers\s*\.\s*(?:feedback-desk|"feedback-desk")\s*(?:\.|\]\]?\s*(?:#.*)?$)/;
+    const ours = /^\s*\[\[?\s*mcp_servers\s*\.\s*(?:airedale|"airedale"|'airedale')\s*(?:\.|\]\]?\s*(?:#.*)?$)/;
     const anyHeader = /^\s*\[/;
     const kept: string[] = [];
     let dropping = false;
@@ -278,8 +282,8 @@ export function upsertCodexServer(existing: string, url: string, helperCommand: 
         }
     }
     const rest = kept.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd();
-    if (/^\s*"?feedback-desk"?\s*=/m.test(rest) || /mcp_servers\s*=\s*\{[^}]*feedback-desk/.test(rest)) {
-        throw new CliError('config.toml 裡用其他寫法定義了 feedback-desk（例如 inline table），請先手動移除再執行。');
+    if (/^\s*(?:airedale|"airedale"|'airedale')\s*=/m.test(rest) || /^\s*mcp_servers\s*=\s*\{/m.test(rest)) {
+        throw new CliError('config.toml 以 inline table 等形式設定了 Airedale 或 mcp_servers，請先改用獨立的 TOML 表格。');
     }
     const block = `[mcp_servers.${MCP_NAME}]\nurl = ${JSON.stringify(url)}\nhttp_headers_helper = ${JSON.stringify(helperCommand)}\n`;
     return `${rest === '' ? '' : `${rest}\n\n`}${block}`;
@@ -347,7 +351,7 @@ export async function mcp(rt: Runtime, argv: string[]): Promise<number> {
         return mcpToken(rt, rest);
     }
     if (action !== 'install') {
-        throw new CliError('用法：feedback-desk mcp install [--claude] [--codex] [--scope user|local] [--url https://你的站]，或 mcp token --agent 名稱（其他 MCP 用戶端）');
+        throw new CliError('用法：airedale mcp install [--claude] [--codex] [--scope user|local] [--url https://你的站]，或 mcp token --agent 名稱（其他 MCP 用戶端）');
     }
     const args = parse(rest, { claude: { type: 'boolean' }, codex: { type: 'boolean' }, scope: { type: 'string' } });
     const scope = str(args, 'scope') ?? 'user';
@@ -367,7 +371,6 @@ export async function mcp(rt: Runtime, argv: string[]): Promise<number> {
         if (!(await commandExists(rt, 'claude'))) {
             rt.out(`Claude Code：找不到 claude 指令，略過。安裝 Claude Code 後再執行 ${CLI_COMMAND} mcp install --claude。`);
         } else {
-            await revokePrevious(rt, api, 'claude');
             const created = await api.post<{ token: string; id: number }>('/tokens', { name: 'Claude Code MCP', agent: 'Claude Code' });
             const helper = writeHelper(rt, 'claude', created.token);
             await rt.run('claude', ['mcp', 'remove', MCP_NAME, '--scope', scope]);
@@ -377,9 +380,10 @@ export async function mcp(rt: Runtime, argv: string[]): Promise<number> {
                 await api.delete(`/tokens/${created.id}`).catch(() => undefined);
                 throw new CliError(`claude mcp add-json 失敗：${(result.stderr || result.stdout).trim()}`);
             }
+            await revokePrevious(rt, api, 'claude');
             rememberToken(rt, api, 'claude', created.id);
             rt.out(`Claude Code：已加入 MCP server「${MCP_NAME}」（scope ${scope}，token #${created.id}）。`);
-            rt.out(`  token 存在 ${join(mcpDir(rt), 'claude.token')}（只有你的帳號能讀），Claude Code 連線時用 headersHelper 讀取；重開 Claude Code 後可用 /mcp 確認。`);
+            rt.out(`  token 存在 ${join(mcpInstallDir(rt), 'claude.token')}（只有你的帳號能讀），Claude Code 連線時用 headersHelper 讀取；重開 Claude Code 後可用 /mcp 確認。`);
             installed++;
         }
     }
@@ -390,7 +394,6 @@ export async function mcp(rt: Runtime, argv: string[]): Promise<number> {
         } else {
             const path = codexConfigPath(rt);
             const current = existsSync(path) ? readFileSync(path, 'utf8') : '';
-            await revokePrevious(rt, api, 'codex');
             const created = await api.post<{ token: string; id: number }>('/tokens', { name: 'Codex MCP', agent: 'Codex' });
             const helper = writeHelper(rt, 'codex', created.token);
             let next: string;
@@ -401,13 +404,10 @@ export async function mcp(rt: Runtime, argv: string[]): Promise<number> {
                 throw error;
             }
             writeAtomically(path, next);
+            await revokePrevious(rt, api, 'codex');
             rememberToken(rt, api, 'codex', created.id);
-            const legacyEnv = join(configDir(rt), 'codex.env');
-            if (existsSync(legacyEnv)) {
-                rmSync(legacyEnv);
-            }
             rt.out(`Codex：已寫入 ${path} 的 [mcp_servers.${MCP_NAME}]（token #${created.id}），原檔備份為 config.toml.bak。`);
-            rt.out(`  token 存在 ${join(mcpDir(rt), 'codex.token')}（只有你的帳號能讀），Codex 連線時用 http_headers_helper 讀取，不需要設定環境變數。`);
+            rt.out(`  token 存在 ${join(mcpInstallDir(rt), 'codex.token')}（只有你的帳號能讀），Codex 連線時用 http_headers_helper 讀取，不需要設定環境變數。`);
             installed++;
         }
     }

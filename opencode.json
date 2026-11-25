@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "airedale": {
+        "type": "remote",
+        "url": "http://127.0.0.1:8787/mcp",
+        "oauth": false,
+        "codemode": false,
+        "headers": {
+          "Authorization": "Bearer {env:FEEDBACK_DESK_MCP_TOKEN}"
+        }
+      }
+    }
+  }
+}

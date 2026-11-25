@@ -193,7 +193,7 @@ describe('W4 deployment and trusted retests', () => {
         expect(confirmation).toBe(1);
         const system = await env.DB.prepare(`SELECT e.actor_name, e.agent FROM report_events e JOIN reports r ON r.id=e.report_id
             WHERE r.public_id=? AND e.kind='status' ORDER BY e.id DESC LIMIT 1`).bind(internal).first();
-        expect(system).toEqual({ actor_name: 'Feedback Desk', agent: 'Feedback Desk' });
+        expect(system).toEqual({ actor_name: 'Airedale', agent: 'Airedale' });
         const detail = await json(await api('GET', `/projects/${f.slug}/reports/${customer}/automation/${f.qa}`, f.team));
         expect(detail).toMatchObject({ retests: [{ deployment_id: deployment.deployment_id, outcome: 'waiting_customer',
             observation: { evidence_refs: done.evidence_refs, attempt_id: done.attempt_id } }] });

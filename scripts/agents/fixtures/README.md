@@ -1,6 +1,6 @@
 # Worker 本機隔離專案
 
-在 feedback-desk 根目錄執行以下指令。首次執行會從 GitHub 下載固定版本，建立兩個獨立的 Git 專案。再次執行會離線核對基底、設定與 origin，保留已產生的工作分支。可在指令尾端指定其他資料目錄。
+在 Airedale 根目錄執行以下指令。首次執行會從 GitHub 下載固定版本，建立兩個獨立的 Git 專案。再次執行會離線核對基底、設定與 origin，保留已產生的工作分支。可在指令尾端指定其他資料目錄。
 
 ```sh
 node scripts/agents/fixtures/prepare.mjs

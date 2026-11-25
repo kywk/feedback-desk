@@ -8,10 +8,10 @@ import { CLI_COMMAND, CliError, defaultRuntime, type Runtime } from './runtime';
 declare const __APP_VERSION__: string | undefined;
 const VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
 
-export const HELP = `feedback-desk ${VERSION}：在 Cloudflare Workers 免費方案架設輕量專案溝通、任務追蹤系統，讓 AI agent 處理回報單並互相交接。
+export const HELP = `airedale ${VERSION}：在 Cloudflare Workers 免費方案架設輕量專案溝通、任務追蹤系統，讓 AI agent 處理回報單並互相交接。
 
 部署（在要放設定檔的資料夾執行）
-  init [--name feedback-desk] [--domain feedback.example.com] [--no-cron] [--force]
+  init [--name airedale] [--domain feedback.example.com] [--no-cron] [--force]
                                    產生或檢查 wrangler.jsonc
   deploy                           部署 Worker、建立 D1/R2、套用資料庫 migrations
   bootstrap <帳號> [--name 顯示名稱] [--set-password | --password-stdin]
@@ -57,7 +57,7 @@ export const HELP = `feedback-desk ${VERSION}：在 Cloudflare Workers 免費方
 處理回報單
   reports <project> [--status new] [--creator client] [--include-deleted] [--include-public] [--unread] [--json]
   report <project> <public_id|編號> [--json] [--no-download] [--download-dir 路徑]
-                                   附件預設下載到 ~/.cache/feedback-desk（權限 700）
+                                   附件預設下載到 ~/.cache/airedale（權限 700）
   create <project> --title 標題 --description 說明 [--category 分類] [--attach 圖檔]... [--for-client [--notice 通知文字]]
                                    開新單（團隊與客戶帳號都可以）
   adjust <project> <public_id> [--note 文字] [--append] [--image 檔案]... [--by-id] [--force]

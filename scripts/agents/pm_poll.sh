@@ -31,7 +31,7 @@ POLL_LOG="${PM_POLL_LOG:-/tmp/pm_agent_poll.log}"
 
 # --session 用 ses 開頭，可跨輪沿用同一 session 保持上下文。
 SESSION_ID="ses_pmagent"
-PROMPT="請用 feedback-desk MCP 收單並處理（見你的 system prompt）。"
+PROMPT="請用 airedale MCP 收單並處理（見你的 system prompt）。"
 
 echo "[PM Agent] 啟動輪詢，每 ${INTERVAL}s 喚起一次 PM agent（模型 ${MODEL}）。"
 echo "[PM Agent] log: ${POLL_LOG}"

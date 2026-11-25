@@ -114,7 +114,7 @@ export async function project(rt: Runtime, argv: string[]): Promise<number> {
             return 0;
         }
         default:
-            throw new CliError('用法：feedback-desk project create|list|categories|client-link|owner-link|client-account');
+            throw new CliError('用法：airedale project create|list|categories|client-link|owner-link|client-account');
     }
 }
 
@@ -148,7 +148,7 @@ function printClientPassword(rt: Runtime, result: ClientPassword): void {
 export async function client(rt: Runtime, argv: string[]): Promise<number> {
     const [action, ...rest] = argv;
     const args = parse(rest, { name: { type: 'string' }, prefill: { type: 'boolean' } });
-    const usage = '用法：feedback-desk client create|list|reset|disable|enable|delete <slug> [帳號]';
+    const usage = '用法：airedale client create|list|reset|disable|enable|delete <slug> [帳號]';
     if (!action) {
         throw new CliError(usage);
     }
@@ -253,7 +253,7 @@ export async function developer(rt: Runtime, argv: string[]): Promise<number> {
         return 0;
     }
     if (action !== 'create' && action !== 'reset') {
-        throw new CliError('用法：feedback-desk developer create|reset|disable|enable|delete|list');
+        throw new CliError('用法：airedale developer create|reset|disable|enable|delete|list');
     }
     const username = requirePositional(args, 0, '<帳號>');
     const result =

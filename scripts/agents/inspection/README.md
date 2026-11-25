@@ -1,10 +1,10 @@
 # Whippet 巡檢橋接器
 
-在內網以 Node.js 執行。橋接器讀取 Whippet 的巡檢終態與 Run 詳情，將具有效報告的產品斷言失敗送到 Feedback Desk，再把工單關聯寫回 Whippet。
+在內網以 Node.js 執行。橋接器讀取 Whippet 的巡檢終態與 Run 詳情，將具有效報告的產品斷言失敗送到 Airedale，再把工單關聯寫回 Whippet。
 
 ## 設定來源
 
-先在 Whippet 設定巡檢來源及橋接憑證，在 Feedback Desk 啟用對應範圍的巡檢收件並登錄專用 `fdi_` token 及 workspace、test、check 授權。設定檔只填憑證的環境變數名稱。`environment` 與 `scope_revision` 對應 Feedback Desk 的授權範圍，`whippet_environment` 對應 Whippet 的巡檢環境。
+先在 Whippet 設定巡檢來源及橋接憑證，在 Airedale 啟用對應範圍的巡檢收件並登錄專用 `fdi_` token 及 workspace、test、check 授權。設定檔只填憑證的環境變數名稱。`environment` 與 `scope_revision` 對應 Airedale 的授權範圍，`whippet_environment` 對應 Whippet 的巡檢環境。
 
 ```json
 {
@@ -55,9 +55,9 @@ node scripts/agents/inspection/cli.mjs --reconcile portal-qa
 
 讓常駐程序在持久磁碟上使用自己的狀態目錄（權限 `0700`）。修改設定或輪替憑證後重新啟動程序，保留原狀態目錄。每頁的 Run 詳情驗證、分類與所有應寫入的關聯都完成後，才保存該頁游標。回應在提交後遺失時，可重新啟動或回放。橋接器以相同事件與操作識別重送，並核對原收據及兩端的關聯回覆。
 
-`--reconcile` 向 Feedback Desk 取得指定來源最多 50 筆尚未確認的關聯，逐筆回查 Whippet 目前的 Run、attempt 與證據，補寫 Whippet 再確認 Feedback Desk 的收據。此操作直接使用現行授權，可在本機狀態遺失、輪替授權版本或輪詢清單已前進時補寫。證據或權限已改變的待辦仍保留，程式以非零狀態結束並記錄原因。可重複執行處理後續批次。
+`--reconcile` 向 Airedale 取得指定來源最多 50 筆尚未確認的關聯，逐筆回查 Whippet 目前的 Run、attempt 與證據，補寫 Whippet 再確認 Airedale 的收據。此操作直接使用現行授權，可在本機狀態遺失、輪替授權版本或輪詢清單已前進時補寫。證據或權限已改變的待辦仍保留，程式以非零狀態結束並記錄原因。可重複執行處理後續批次。
 
-終端輸出為 JSON Lines，狀態目錄保存每筆 Run 的送件內容、Feedback Desk 收據與處理結果。`passed` 代表巡檢通過，`purpose_not_inspection` 代表非正式巡檢。`infrastructure`、`cancelled`、`timed_out` 與 `unverified` 可用於維運查核，`test_not_mapped` 及 `check_not_mapped` 可用於核對授權設定。`stale_run` 表示 Feedback Desk 已判定該 Run 早於該問題的結案界線。證據參照以 `whippet:run:<run-id>` 保存，原始報告由 Whippet 管理。
+終端輸出為 JSON Lines，狀態目錄保存每筆 Run 的送件內容、Airedale 收據與處理結果。`passed` 代表巡檢通過，`purpose_not_inspection` 代表非正式巡檢。`infrastructure`、`cancelled`、`timed_out` 與 `unverified` 可用於維運查核，`test_not_mapped` 及 `check_not_mapped` 可用於核對授權設定。`stale_run` 表示 Airedale 已判定該 Run 早於該問題的結案界線。證據參照以 `whippet:run:<run-id>` 保存，原始報告由 Whippet 管理。
 
 ```sh
 npm run test:cli -- test/cli/automation-inspection.test.ts

@@ -15,7 +15,7 @@ export function packageRoot(): string {
             return candidate;
         }
     }
-    throw new CliError('找不到套件檔案（migrations）。請重新安裝 feedback-desk。');
+    throw new CliError('找不到套件檔案（migrations）。請重新安裝 Airedale CLI。');
 }
 
 export function deployDir(rt: Runtime, dirOption: string | undefined): string {
@@ -126,7 +126,7 @@ export function wranglerTemplate(options: TemplateOptions): string {
     const cron = options.cron
         ? `\n    // 每天清一次沒用到的暫存上傳檔與過期的限流紀錄（免費方案每個帳號可有 5 個 Cron Trigger）。\n    "triggers": { "crons": ["17 3 * * *"] },`
         : `\n    // 沒有 Cron Trigger 時，暫存上傳檔會在之後的上傳請求中順便清除。\n    // "triggers": { "crons": ["17 3 * * *"] },`;
-    return `// Feedback Desk 的 Cloudflare Workers 設定（由 ${CLI_COMMAND} init 產生）。
+    return `// Airedale 的 Cloudflare Workers 設定（由 ${CLI_COMMAND} init 產生）。
 // D1 與 R2 不寫 ID：第一次 deploy 時 wrangler 會依名稱自動建立。
 {
     "name": ${JSON.stringify(options.name)},
@@ -150,7 +150,7 @@ export function wranglerTemplate(options: TemplateOptions): string {
         "FEEDBACK_LABEL_OWNER": "開發團隊",
         "FEEDBACK_PORTAL_TITLE": "問題回報追蹤",
         "FEEDBACK_HOME_TITLE": "問題回報",
-        "FEEDBACK_HOME_EYEBROW": "Feedback Desk",
+        "FEEDBACK_HOME_EYEBROW": "Airedale",
         "FEEDBACK_HOME_HEADING": "問題回報",
         "FEEDBACK_UTC_OFFSET": "+08:00",
         "FEEDBACK_TIMEZONE_NAME": "台北時間",

@@ -1,10 +1,11 @@
 {
-  "name": "feedback-desk",
+  "name": "airedale",
   "version": "0.1.0",
   "description": "Lightweight open-source project communication and task tracking on the Cloudflare Workers free plan, with AI agent handoff. CLI deploys it and lets AI agents work on reports.",
   "license": "MIT",
   "type": "module",
   "bin": {
+    "airedale": "dist/cli.js",
     "feedback-desk": "dist/cli.js"
   },
   "files": [

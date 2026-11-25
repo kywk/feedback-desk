@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { main } from '../../src/cli/index';
 import { upsertCodexServer } from '../../src/cli/commands/auth';
 import { hashPassword } from '../../src/cli/commands/deploy';
+import { configDir } from '../../src/cli/config';
 import { stripJsonc, wranglerTemplate, checkWranglerConfig } from '../../src/cli/deploy-dir';
 import { escapeTerminal, table } from '../../src/cli/output';
 import type { RunOptions, RunResult, Runtime } from '../../src/cli/runtime';
@@ -38,7 +39,7 @@ function fakeRuntime(
     const runs: Array<{ command: string; args: string[]; options?: RunOptions }> = [];
     let clock = Date.parse('2026-10-19T00:00:00Z');
     const rt: Runtime = {
-        env: { FEEDBACK_DESK_CONFIG_DIR: join(home, '.config', 'feedback-desk'), ...options.env },
+        env: { FEEDBACK_DESK_CONFIG_DIR: join(home, '.config', 'airedale'), ...options.env },
         cwd,
         home,
         tmp: mkdtempSync(join(tmpdir(), 'fd-cli-tmp-')),
@@ -109,6 +110,18 @@ describe('help and errors', () => {
 });
 
 describe('init', () => {
+    it('uses the Airedale names when creating a fresh deployment without --name', async () => {
+        const fake = fakeRuntime();
+        expect(await main(['init'], fake.rt)).toBe(0);
+        const config = JSON.parse(stripJsonc(readFileSync(join(fake.cwd, 'wrangler.jsonc'), 'utf8')));
+        expect(config).toMatchObject({
+            name: 'airedale',
+            d1_databases: [{ database_name: 'airedale-db' }],
+            r2_buckets: [{ bucket_name: 'airedale-files' }],
+            vars: { FEEDBACK_HOME_EYEBROW: 'Airedale' },
+        });
+    });
+
     it('writes a wrangler config without resource ids and copies the build', async () => {
         const fake = fakeRuntime();
         expect(await main(['init', '--name', 'fd-e2e-test', '--domain', 'feedback.example.com'], fake.rt)).toBe(0);
@@ -657,11 +670,11 @@ describe('report commands', () => {
         };
         const fake = signedIn(({ url }) => (url.includes('/files/') ? new Response(PNG) : jsonResponse(detail)));
         expect(await main(['report', 'demo', '1'], fake.rt)).toBe(0);
-        const dir = join(fake.home, '.cache', 'feedback-desk', 'demo', 'uuid-1');
+        const dir = join(fake.home, '.cache', 'airedale', 'demo', 'uuid-1');
         const path = join(dir, '5-evil_name.png');
         expect(new Uint8Array(readFileSync(path))).toEqual(PNG);
         expect(statSync(path).mode & 0o777).toBe(0o600);
-        for (const level of [join(fake.home, '.cache', 'feedback-desk'), join(fake.home, '.cache', 'feedback-desk', 'demo'), dir]) {
+        for (const level of [join(fake.home, '.cache', 'airedale'), join(fake.home, '.cache', 'airedale', 'demo'), dir]) {
             expect(statSync(level).mode & 0o777).toBe(0o700);
         }
         expect(fake.text()).toContain(path);
@@ -811,13 +824,14 @@ describe('mcp install', () => {
         expect(await main(['mcp', 'install'], fake.rt)).toBe(0);
 
         const add = fake.runs.find((run) => run.command === 'claude' && run.args[1] === 'add-json')!;
+        expect(add.args[2]).toBe('airedale');
         expect(add.args.join(' ')).not.toContain('fdk_');
         const claudeConfig = JSON.parse(add.args[3]);
         expect(claudeConfig).toMatchObject({ type: 'http', url: 'https://desk.example.com/mcp' });
         expect(claudeConfig.headersHelper).toMatch(/^node '.*headers\.cjs' claude$/);
         expect(add.args.slice(-2)).toEqual(['--scope', 'user']);
 
-        const mcpDir = join(fake.rt.env.FEEDBACK_DESK_CONFIG_DIR as string, 'mcp');
+        const mcpDir = join(fake.rt.env.FEEDBACK_DESK_CONFIG_DIR as string, 'mcp', 'airedale');
         expect(readFileSync(join(mcpDir, 'claude.token'), 'utf8')).toBe('fdk_tool_11\n');
         expect(readFileSync(join(mcpDir, 'codex.token'), 'utf8')).toBe('fdk_tool_12\n');
         for (const file of ['claude.token', 'codex.token', 'headers.cjs']) {
@@ -831,10 +845,10 @@ describe('mcp install', () => {
 
         const toml = readFileSync(join(fake.home, '.codex', 'config.toml'), 'utf8');
         expect(toml).toContain('model = "gpt-5"');
-        expect(toml).toMatch(/\[mcp_servers\.feedback-desk\]\nurl = "https:\/\/desk\.example\.com\/mcp"\nhttp_headers_helper = "node '.*headers\.cjs' codex"\n/);
-        expect(toml).not.toContain('old.example.com');
-        expect(toml).not.toContain('bearer_token_env_var');
-        expect(toml).not.toContain('[mcp_servers.feedback-desk.env]');
+        expect(toml).toMatch(/\[mcp_servers\.airedale\]\nurl = "https:\/\/desk\.example\.com\/mcp"\nhttp_headers_helper = "node '.*headers\.cjs' codex"\n/);
+        expect(toml).toContain('old.example.com');
+        expect(toml).toContain('bearer_token_env_var');
+        expect(toml).toContain('[mcp_servers.feedback-desk.env]');
         expect(toml).toContain('[mcp_servers.other]');
         expect(readFileSync(join(fake.home, '.codex', 'config.toml.bak'), 'utf8')).toBe(original);
         expect(fake.text()).not.toContain('fdk_');
@@ -862,17 +876,33 @@ describe('mcp install', () => {
     });
 
     it('rewrites the Codex table with its sub-tables and refuses inline definitions', () => {
-        expect(upsertCodexServer('', 'https://a/mcp', 'node x')).toBe('[mcp_servers.feedback-desk]\nurl = "https://a/mcp"\nhttp_headers_helper = "node x"\n');
-        const withArrays = '[mcp_servers."feedback-desk"]\nurl = "x"\n[[mcp_servers.feedback-desk.items]]\na = 1\n[profiles.x]\nmodel = "y"\n';
+        expect(upsertCodexServer('', 'https://a/mcp', 'node x')).toBe('[mcp_servers.airedale]\nurl = "https://a/mcp"\nhttp_headers_helper = "node x"\n');
+        const withArrays = '[mcp_servers."airedale"]\nurl = "x"\n[[mcp_servers.airedale.items]]\na = 1\n[profiles.x]\nmodel = "y"\n';
         const next = upsertCodexServer(withArrays, 'https://a/mcp', 'node x');
         expect(next).not.toContain('items');
         expect(next).toContain('[profiles.x]');
-        expect(() => upsertCodexServer('[mcp_servers]\n"feedback-desk" = { url = "x" }\n', 'https://a/mcp', 'node x')).toThrow();
+        expect(() => upsertCodexServer('[mcp_servers]\n"airedale" = { url = "x" }\n', 'https://a/mcp', 'node x')).toThrow();
     });
 });
 
 describe('which token goes where', () => {
     const listed = { include_public: false, reports: [] };
+
+    it('uses the Airedale config directory for fresh installs and reuses a legacy login', async () => {
+        const fake = fakeRuntime({ handler: () => jsonResponse(listed) });
+        delete fake.rt.env.FEEDBACK_DESK_CONFIG_DIR;
+        const root = join(fake.home, '.config');
+        expect(configDir(fake.rt)).toBe(join(root, 'airedale'));
+
+        const legacy = join(root, 'feedback-desk');
+        mkdirSync(legacy, { recursive: true });
+        writeFileSync(join(legacy, 'config.json'), JSON.stringify({
+            default_site: 'https://desk.example.com',
+            sites: { 'https://desk.example.com': { token: 'fdk_legacy' } },
+        }));
+        expect(await main(['reports', 'demo'], fake.rt)).toBe(0);
+        expect(fake.calls[0].headers.authorization).toBe('Bearer fdk_legacy');
+    });
 
     it('sends FEEDBACK_DESK_TOKEN only to the site named in FEEDBACK_DESK_URL', async () => {
         const fake = fakeRuntime({ handler: () => jsonResponse(listed), env: { FEEDBACK_DESK_TOKEN: 'fdk_env' } });

@@ -166,6 +166,7 @@ export async function commitRepair(tree, branch, base, indexTree, operation, sig
         const timestamp = await gitText(tree, ['show', '-s', '--format=%ct', base], { signal });
         const date = Number(timestamp) + 1;
         requireScope(Number.isSafeInteger(date) && date > 0, 'repair_commit_failed');
+        // Keep the original metadata so retried operations reproduce the recorded head SHA.
         const sha = await gitText(tree, ['commit-tree', indexTree, '-p', base, '-m', 'Feedback Desk repair ' + operation], {
             signal,
             env: {
